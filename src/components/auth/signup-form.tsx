@@ -45,7 +45,7 @@ export function SignupForm() {
         return;
     }
     try {
-      await signup(email, name, password, userClass, targetYear);
+      await signup(email, name, password, userClass === "none" ? "" : userClass, targetYear === "none" ? "" : targetYear);
       toast({
         title: "Signup Successful!",
         description: "Welcome to NEET Prep Pro. You are now being redirected.",
@@ -126,7 +126,7 @@ export function SignupForm() {
                 <SelectValue placeholder="Select Your Class" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="none">None</SelectItem>
                 <SelectItem value="11">Class 11</SelectItem>
                 <SelectItem value="12">Class 12</SelectItem>
                 <SelectItem value="dropper">Dropper</SelectItem>
@@ -140,7 +140,7 @@ export function SignupForm() {
                 <SelectValue placeholder="Select Target Year" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="none">None</SelectItem>
                 {[new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2, new Date().getFullYear() + 3].map(year => (
                   <SelectItem key={year} value={String(year)}>{String(year)}</SelectItem>
                 ))}
