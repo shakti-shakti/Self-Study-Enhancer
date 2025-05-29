@@ -6,13 +6,24 @@ import { BookOpen, Download, Edit, ZoomIn, ZoomOut, FileText } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { logActivity } from '@/lib/activity-logger';
 
 const availableBooks = [
-  { id: "physics_xi", name: "Physics XI", chapters: ["Physical World", "Units and Measurement", "Motion in a Straight Line"] },
-  { id: "chemistry_xi", name: "Chemistry XI", chapters: ["Some Basic Concepts of Chemistry", "Structure of Atom", "Classification of Elements"] },
-  { id: "biology_xi", name: "Biology XI", chapters: ["The Living World", "Biological Classification", "Plant Kingdom"] },
-  { id: "physics_xii", name: "Physics XII", chapters: ["Electric Charges and Fields", "Electrostatic Potential and Capacitance", "Current Electricity"] },
+  { id: "physics_xi", name: "Physics XI", chapters: ["Physical World", "Units and Measurement", "Motion in a Straight Line", "Laws of Motion", "Work, Energy and Power"] },
+  { id: "chemistry_xi", name: "Chemistry XI", chapters: ["Some Basic Concepts of Chemistry", "Structure of Atom", "Classification of Elements", "Chemical Bonding", "States of Matter"] },
+  { id: "biology_xi", name: "Biology XI", chapters: ["The Living World", "Biological Classification", "Plant Kingdom", "Animal Kingdom", "Morphology of Flowering Plants"] },
+  { id: "physics_xii", name: "Physics XII", chapters: ["Electric Charges and Fields", "Electrostatic Potential and Capacitance", "Current Electricity", "Moving Charges and Magnetism", "Magnetism and Matter"] },
 ];
+
+const chapterMockContent: Record<string, string[]> = {
+  "Physical World": ["Introduction to Physics", "Scope and Excitement of Physics", "Fundamental Forces in Nature", "Nature of Physical Laws"],
+  "Units and Measurement": ["The International System of Units", "Measurement of Length, Mass and Time", "Accuracy, Precision of Instruments and Errors in Measurement", "Significant Figures", "Dimensions of Physical Quantities"],
+  "Motion in a Straight Line": ["Position, Path Length and Displacement", "Average Velocity and Average Speed", "Instantaneous Velocity and Speed", "Acceleration", "Kinematic Equations for Uniformly Accelerated Motion"],
+  "Some Basic Concepts of Chemistry": ["Importance of Chemistry", "Nature of Matter", "Properties of Matter and their Measurement", "Uncertainty in Measurement", "Laws of Chemical Combinations"],
+  "The Living World": ["What is Living?", "Diversity in the Living World", "Taxonomic Categories", "Taxonomical Aids"],
+  "Electric Charges and Fields": ["Introduction to Electric Charge", "Conductors and Insulators", "Charging by Induction", "Basic Properties of Electric Charge", "Coulomb's Law"],
+};
+
 
 export default function NcertViewerPage() {
   const { toast } = useToast();
@@ -22,23 +33,37 @@ export default function NcertViewerPage() {
   const handleBookSelect = (bookId: string) => {
     const book = availableBooks.find(b => b.id === bookId);
     setSelectedBook(book || null);
-    setSelectedChapter(null); // Reset chapter when book changes
+    setSelectedChapter(null); 
     if (book) {
       toast({ title: `Selected: ${book.name}`, description: "Choose a chapter to view." });
+      logActivity("NCERT Viewer", `Selected book: ${book.name}`);
     }
   };
 
   const handleChapterSelect = (chapterName: string) => {
     setSelectedChapter(chapterName);
-    toast({ title: `Chapter: ${chapterName}`, description: "Displaying content (mock)." });
+    toast({ title: `Chapter: ${chapterName}`, description: "Displaying content." });
+    if (selectedBook) {
+        logActivity("NCERT Viewer", `Viewed chapter: ${chapterName} from ${selectedBook.name}`);
+    }
   };
 
   const handleDownloadBook = () => {
-    toast({ title: "Download Started (Mock)", description: "Your book is being downloaded..." });
+    if (selectedBook) {
+        toast({ title: "Download Started (Mock)", description: `Simulating download for ${selectedBook.name}...` });
+        logActivity("NCERT Viewer", `Attempted download for book: ${selectedBook.name}`);
+    } else {
+        toast({ title: "No Book Selected", description: "Please select a book first.", variant: "destructive" });
+    }
   };
 
   const handleViewerAction = (action: string) => {
-    toast({ title: `Action: ${action} (Mock)`, description: `Performing ${action.toLowerCase()} operation on the document.` });
+    if (selectedChapter) {
+        toast({ title: `Action: ${action} (Mock)`, description: `Performing ${action.toLowerCase()} on "${selectedChapter}".` });
+        logActivity("NCERT Viewer", `Viewer action: ${action} on chapter ${selectedChapter}`);
+    } else {
+         toast({ title: "No Chapter Selected", description: "Please select a chapter first.", variant: "destructive" });
+    }
   };
 
   return (
@@ -50,10 +75,9 @@ export default function NcertViewerPage() {
       <Card className="flex-1 flex flex-col shadow-lg">
         <CardHeader>
           <CardTitle>Your Digital Textbooks</CardTitle>
-          <CardDescription>Download, save, view chapters, and make notes directly on your NCERT books.</CardDescription>
+          <CardDescription>Download, save, view chapters, and make notes directly on your NCERT books. (Content is mock)</CardDescription>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col md:flex-row gap-6 overflow-hidden">
-          {/* Sidebar for book list */}
           <Card className="w-full md:w-1/3 lg:w-1/4 flex flex-col bg-card/80">
             <CardHeader className="pb-2">
               <CardTitle className="text-xl">My Books</CardTitle>
@@ -71,13 +95,12 @@ export default function NcertViewerPage() {
               ))}
             </ScrollArea>
             <CardFooter className="p-4">
-              <Button variant="outline" className="w-full" onClick={handleDownloadBook}>
-                <Download className="mr-2 h-4 w-4" /> Download New Book
+              <Button variant="outline" className="w-full" onClick={handleDownloadBook} disabled={!selectedBook}>
+                <Download className="mr-2 h-4 w-4" /> Download Selected Book
               </Button>
             </CardFooter>
           </Card>
           
-          {/* Main viewer area */}
           <div className="w-full md:w-2/3 lg:w-3/4 flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold">
@@ -90,10 +113,10 @@ export default function NcertViewerPage() {
                 <Button variant="outline" size="icon" onClick={() => handleViewerAction("Edit/Annotate")} disabled={!selectedChapter}><Edit className="h-5 w-5"/></Button>
               </div>
             </div>
-            <Card className="flex-1 p-2 border rounded-lg bg-muted/30 flex flex-col">
+            <Card className="flex-1 border rounded-lg bg-muted/30 flex overflow-hidden">
               {selectedBook && (
-                <ScrollArea className="w-1/3 md:w-1/4 p-2 border-r">
-                   <h3 className="font-medium mb-2 p-2 text-base">Chapters</h3>
+                <ScrollArea className="w-1/3 md:w-1/4 p-2 border-r border-border">
+                   <h3 className="font-medium mb-2 p-2 text-base sticky top-0 bg-muted/50 z-10">Chapters</h3>
                   {selectedBook.chapters.map(chapter => (
                     <Button 
                       key={chapter} 
@@ -122,9 +145,10 @@ export default function NcertViewerPage() {
                 {selectedChapter && (
                   <div className="prose prose-sm dark:prose-invert max-w-none">
                     <h3 className="text-lg font-semibold mb-2">{selectedChapter}</h3>
-                    <p>Mock content for {selectedChapter}. In a real application, the PDF or text content of the chapter would be displayed here. This could involve using a PDF rendering library or fetching HTML content.</p>
-                    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
-                    {/* More mock content */}
+                    {(chapterMockContent[selectedChapter] || ["This is mock content for the selected chapter. In a real application, actual chapter text or PDF would be rendered here."]).map((paragraph, index) => (
+                        <p key={index}>{paragraph}</p>
+                    ))}
+                    <p className="mt-4 text-xs text-muted-foreground">End of mock content for {selectedChapter}.</p>
                   </div>
                 )}
               </ScrollArea>

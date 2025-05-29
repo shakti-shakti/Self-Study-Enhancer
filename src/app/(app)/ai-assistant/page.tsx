@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Send, Loader2, User, Bot } from "lucide-react";
 import { answerQuestion, type AnswerQuestionInput, type AnswerQuestionOutput } from '@/ai/flows/answer-questions';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"; // Removed AvatarImage as we use icons
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { logActivity } from '@/lib/activity-logger';
 
 interface Message {
   id: string;
@@ -25,19 +26,20 @@ export default function AiAssistantPage() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Scroll to bottom when new messages are added
     if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTo({ top: scrollAreaRef.current.scrollHeight, behavior: 'smooth' });
+      const { scrollHeight, clientHeight } = scrollAreaRef.current;
+      scrollAreaRef.current.scrollTo({ top: scrollHeight - clientHeight, behavior: 'smooth' });
     }
   }, [messages]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
+    const userMessageText = inputValue;
     const userMessage: Message = {
-      id: Date.now().toString() + '-user',
+      id: crypto.randomUUID(),
       sender: 'user',
-      text: inputValue,
+      text: userMessageText,
       timestamp: new Date(),
     };
     setMessages(prevMessages => [...prevMessages, userMessage]);
@@ -45,12 +47,14 @@ export default function AiAssistantPage() {
     setIsLoading(true);
     setError(null);
 
+    logActivity("AI Query", `User asked: "${userMessageText.substring(0, 50)}${userMessageText.length > 50 ? '...' : ''}"`, { question: userMessageText });
+
     try {
       const input: AnswerQuestionInput = { question: userMessage.text };
       const output: AnswerQuestionOutput = await answerQuestion(input);
       
       const aiMessage: Message = {
-        id: Date.now().toString() + '-ai',
+        id: crypto.randomUUID(),
         sender: 'ai',
         text: output.answer,
         timestamp: new Date(),
@@ -58,15 +62,16 @@ export default function AiAssistantPage() {
       setMessages(prevMessages => [...prevMessages, aiMessage]);
     } catch (err) {
       console.error("Error getting AI response:", err);
-      const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
-      setError(`Failed to get response: ${errorMessage}`);
+      const errorMessageText = err instanceof Error ? err.message : "An unknown error occurred.";
+      setError(`Failed to get response: ${errorMessageText}`);
       const aiErrorMessage: Message = {
-        id: Date.now().toString() + '-ai-error',
+        id: crypto.randomUUID(),
         sender: 'ai',
-        text: `Sorry, I encountered an error: ${errorMessage}`,
+        text: `Sorry, I encountered an error: ${errorMessageText}`,
         timestamp: new Date(),
       };
       setMessages(prevMessages => [...prevMessages, aiErrorMessage]);
+      logActivity("AI Error", `Error answering question: "${userMessageText.substring(0,50)}..."`, { error: errorMessageText });
     } finally {
       setIsLoading(false);
     }
@@ -99,7 +104,7 @@ export default function AiAssistantPage() {
                       <AvatarFallback><Bot className="h-4 w-4"/></AvatarFallback>
                     </Avatar>
                   )}
-                  <div className={`max-w-[70%] p-3 rounded-lg ${msg.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-background border'}`}>
+                  <div className={`max-w-[70%] p-3 rounded-lg ${msg.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-background border shadow-sm'}`}>
                     <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
                     <p className={`text-xs mt-1 ${msg.sender === 'user' ? 'text-primary-foreground/70 text-right' : 'text-muted-foreground'}`}>
                       {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -117,7 +122,7 @@ export default function AiAssistantPage() {
                    <Avatar className="h-8 w-8">
                       <AvatarFallback><Bot className="h-4 w-4"/></AvatarFallback>
                     </Avatar>
-                  <div className="max-w-[70%] p-3 rounded-lg bg-background border">
+                  <div className="max-w-[70%] p-3 rounded-lg bg-background border shadow-sm">
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
                   </div>
                 </div>

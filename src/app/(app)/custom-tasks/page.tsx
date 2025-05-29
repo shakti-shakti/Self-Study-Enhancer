@@ -1,7 +1,7 @@
 
 "use client";
-import { useState } from 'react';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
+import { useState, useEffect } from 'react';
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { ClipboardList, PlusCircle, Edit2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,6 +19,8 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
+import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
+import { logActivity } from '@/lib/activity-logger';
 
 interface CustomTask {
   id: string;
@@ -27,21 +29,25 @@ interface CustomTask {
   category: string;
 }
 
-const initialCustomTasks: CustomTask[] = [
-  { id: "1", title: "Buy new notebooks", completed: false, category: "Personal" },
-  { id: "2", title: "Call a friend", completed: true, category: "Social" },
-  { id: "3", title: "Research summer internships", completed: false, category: "Career" },
-];
-
+const CUSTOM_TASKS_KEY = 'neetPrepProCustomTasks';
 const taskCategories = ["Personal", "Social", "Career", "Academic", "Health", "Other"];
 
 export default function CustomTasksPage() {
   const { toast } = useToast();
-  const [customTasks, setCustomTasks] = useState<CustomTask[]>(initialCustomTasks);
+  const [customTasks, setCustomTasks] = useState<CustomTask[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Partial<CustomTask> & { id?: string }>({});
   const [taskTitle, setTaskTitle] = useState('');
-  const [taskCategory, setTaskCategory] = useState('');
+  const [taskCategory, setTaskCategory] = useState(taskCategories[0]);
+
+  useEffect(() => {
+    setCustomTasks(loadFromLocalStorage<CustomTask[]>(CUSTOM_TASKS_KEY, []));
+  }, []);
+
+  useEffect(() => {
+    saveToLocalStorage(CUSTOM_TASKS_KEY, customTasks);
+  }, [customTasks]);
+
 
   const handleOpenDialog = (task?: CustomTask) => {
     if (task) {
@@ -51,7 +57,7 @@ export default function CustomTasksPage() {
     } else {
       setCurrentTask({});
       setTaskTitle('');
-      setTaskCategory(taskCategories[0]); // Default to first category
+      setTaskCategory(taskCategories[0]);
     }
     setIsFormOpen(true);
   };
@@ -65,6 +71,7 @@ export default function CustomTasksPage() {
     if (currentTask.id) { // Editing existing task
       setCustomTasks(customTasks.map(t => t.id === currentTask.id ? { ...t, title: taskTitle, category: taskCategory } : t));
       toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
+      logActivity("Custom Tasks", `Task updated: "${taskTitle}"`);
     } else { // Adding new task
       const newTask: CustomTask = {
         id: crypto.randomUUID(),
@@ -74,17 +81,33 @@ export default function CustomTasksPage() {
       };
       setCustomTasks(prevTasks => [newTask, ...prevTasks]);
       toast({ title: "Task Added", description: `"${taskTitle}" has been added to your custom tasks.` });
+      logActivity("Custom Tasks", `Task added: "${taskTitle}"`);
     }
     setIsFormOpen(false);
   };
 
   const toggleTaskCompletion = (taskId: string) => {
-    setCustomTasks(customTasks.map(t => t.id === taskId ? { ...t, completed: !t.completed } : t));
+    setCustomTasks(customTasks.map(t => {
+      if (t.id === taskId) {
+        const updatedTask = { ...t, completed: !t.completed };
+         if (updatedTask.completed) {
+          logActivity("Custom Tasks", `Task completed: "${updatedTask.title}"`);
+        } else {
+          logActivity("Custom Tasks", `Task marked incomplete: "${updatedTask.title}"`);
+        }
+        return updatedTask;
+      }
+      return t;
+    }));
   };
 
   const handleDeleteTask = (taskId: string) => {
+    const taskToDelete = customTasks.find(t => t.id === taskId);
     setCustomTasks(customTasks.filter(t => t.id !== taskId));
-    toast({ variant: "destructive", title: "Task Deleted", description: "The custom task has been removed." });
+    if (taskToDelete) {
+      toast({ variant: "destructive", title: "Task Deleted", description: `"${taskToDelete.title}" removed.` });
+      logActivity("Custom Tasks", `Task deleted: "${taskToDelete.title}"`);
+    }
   };
 
 

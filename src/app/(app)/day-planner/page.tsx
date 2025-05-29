@@ -1,6 +1,6 @@
 
 "use client";
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { CalendarDays, PlusCircle, CheckSquare, Square, Edit2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,8 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
+import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
+import { logActivity } from '@/lib/activity-logger';
 
 interface Task {
   id: string;
@@ -27,32 +29,36 @@ interface Task {
   completed: boolean;
 }
 
-const initialTasks: Task[] = [
-  { id: "1", title: "Physics: Read Chapter 1", startTime: "09:00 AM", duration: "1 hr", completed: true },
-  { id: "2", title: "Chemistry: Solve 10 MCQs", startTime: "10:30 AM", duration: "45 mins", completed: false },
-  { id: "3", title: "Biology: Revise Cell Structure", startTime: "02:00 PM", duration: "1.5 hrs", completed: false },
-];
+const DAY_PLANNER_TASKS_KEY = 'neetPrepProDayPlannerTasks';
 
 export default function DayPlannerPage() {
   const { toast } = useToast();
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Partial<Task> & { id?: string }>({});
   const [taskTitle, setTaskTitle] = useState('');
   const [taskTime, setTaskTime] = useState('');
   const [taskDuration, setTaskDuration] = useState('');
 
+  useEffect(() => {
+    setTasks(loadFromLocalStorage<Task[]>(DAY_PLANNER_TASKS_KEY, []));
+  }, []);
+
+  useEffect(() => {
+    saveToLocalStorage(DAY_PLANNER_TASKS_KEY, tasks);
+  }, [tasks]);
+
   const handleOpenDialog = (task?: Task) => {
     if (task) {
       setCurrentTask(task);
       setTaskTitle(task.title);
-      setTaskTime(task.startTime.replace(' AM', '').replace(' PM', '')); // Assuming time is like "09:00"
+      setTaskTime(task.startTime);
       setTaskDuration(task.duration);
     } else {
       setCurrentTask({});
       setTaskTitle('');
-      setTaskTime('');
-      setTaskDuration('');
+      setTaskTime('09:00'); // Default time
+      setTaskDuration('1 hr'); // Default duration
     }
     setIsFormOpen(true);
   };
@@ -63,32 +69,47 @@ export default function DayPlannerPage() {
       return;
     }
 
-    const formattedTime = taskTime; // Keep as is, or format if needed e.g. with AM/PM
-
     if (currentTask.id) { // Editing existing task
-      setTasks(tasks.map(t => t.id === currentTask.id ? { ...t, title: taskTitle, startTime: formattedTime, duration: taskDuration } : t));
+      setTasks(tasks.map(t => t.id === currentTask.id ? { ...t, title: taskTitle, startTime: taskTime, duration: taskDuration } : t));
       toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
+      logActivity("Day Planner", `Task updated: "${taskTitle}"`);
     } else { // Adding new task
       const newTask: Task = {
         id: crypto.randomUUID(),
         title: taskTitle,
-        startTime: formattedTime,
+        startTime: taskTime,
         duration: taskDuration,
         completed: false,
       };
-      setTasks([...tasks, newTask]);
+      setTasks(prevTasks => [newTask, ...prevTasks].sort((a,b) => a.startTime.localeCompare(b.startTime)));
       toast({ title: "Task Added", description: `"${taskTitle}" has been scheduled.` });
+      logActivity("Day Planner", `Task added: "${taskTitle}"`);
     }
     setIsFormOpen(false);
   };
 
   const toggleTaskCompletion = (taskId: string) => {
-    setTasks(tasks.map(t => t.id === taskId ? { ...t, completed: !t.completed } : t));
+    setTasks(tasks.map(t => {
+      if (t.id === taskId) {
+        const updatedTask = { ...t, completed: !t.completed };
+        if (updatedTask.completed) {
+          logActivity("Day Planner", `Task completed: "${updatedTask.title}"`);
+        } else {
+          logActivity("Day Planner", `Task marked incomplete: "${updatedTask.title}"`);
+        }
+        return updatedTask;
+      }
+      return t;
+    }));
   };
 
   const handleDeleteTask = (taskId: string) => {
+    const taskToDelete = tasks.find(t => t.id === taskId);
     setTasks(tasks.filter(t => t.id !== taskId));
-    toast({ variant: "destructive", title: "Task Deleted", description: "The task has been removed from your planner." });
+    if (taskToDelete) {
+      toast({ variant: "destructive", title: "Task Deleted", description: `"${taskToDelete.title}" removed.` });
+      logActivity("Day Planner", `Task deleted: "${taskToDelete.title}"`);
+    }
   };
 
   return (
@@ -167,7 +188,6 @@ export default function DayPlannerPage() {
               <p className="text-muted-foreground">No tasks scheduled for today. Add a task to get started!</p>
             </div>
           )}
-          <p className="mt-4 text-sm text-muted-foreground">Incomplete tasks will be saved for later (mock persistence).</p>
         </CardContent>
       </Card>
     </div>

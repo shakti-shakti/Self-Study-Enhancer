@@ -1,7 +1,7 @@
 
 "use client";
-import { useState } from 'react';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
+import { useState, useEffect } from 'react';
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { BellRing, PlusCircle, Edit2, Trash2, AlarmClockCheck, AlarmClockOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -18,35 +18,38 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
+import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
+import { logActivity } from '@/lib/activity-logger';
 
 interface Reminder {
   id: string;
   title: string;
   time: string;
-  days: string[]; // e.g., ["Mon", "Wed", "Fri"] or ["Daily"]
+  days: string[]; 
   isActive: boolean;
 }
 
-const initialReminders: Reminder[] = [
-  { id: "1", title: "Morning Physics Review", time: "07:00", days: ["Mon", "Wed", "Fri"], isActive: true },
-  { id: "2", title: "Evening Biology MCQs", time: "20:00", days: ["Daily"], isActive: true },
-  { id: "3", title: "Weekend Chemistry Revision", time: "10:00", days: ["Sat"], isActive: false },
-];
-
+const TASK_REMINDERS_KEY = 'neetPrepProTaskReminders';
 const availableDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function TaskRemindersPage() {
   const { toast } = useToast();
-  const [reminders, setReminders] = useState<Reminder[]>(initialReminders);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [currentReminder, setCurrentReminder] = useState<Partial<Reminder> & { id?: string }>({});
   
-  // Form state
   const [reminderTitle, setReminderTitle] = useState('');
   const [reminderTime, setReminderTime] = useState('');
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [reminderIsActive, setReminderIsActive] = useState(true);
 
+  useEffect(() => {
+    setReminders(loadFromLocalStorage<Reminder[]>(TASK_REMINDERS_KEY, []));
+  }, []);
+
+  useEffect(() => {
+    saveToLocalStorage(TASK_REMINDERS_KEY, reminders);
+  }, [reminders]);
 
   const handleOpenDialog = (reminder?: Reminder) => {
     if (reminder) {
@@ -58,7 +61,7 @@ export default function TaskRemindersPage() {
     } else {
       setCurrentReminder({});
       setReminderTitle('');
-      setReminderTime('09:00'); // Default time
+      setReminderTime('09:00'); 
       setSelectedDays([]);
       setReminderIsActive(true);
     }
@@ -72,12 +75,12 @@ export default function TaskRemindersPage() {
   };
   
   const handleSetDaily = () => {
-    if(selectedDays.length === availableDays.length) {
+    if(selectedDays.length === availableDays.length && selectedDays.every(day => availableDays.includes(day))) {
       setSelectedDays([]);
     } else {
       setSelectedDays([...availableDays]);
     }
-  }
+  };
 
   const handleSaveReminder = () => {
     if (!reminderTitle || !reminderTime || selectedDays.length === 0) {
@@ -88,6 +91,7 @@ export default function TaskRemindersPage() {
     if (currentReminder.id) { // Editing
       setReminders(reminders.map(r => r.id === currentReminder.id ? { ...r, title: reminderTitle, time: reminderTime, days: selectedDays, isActive: reminderIsActive } : r));
       toast({ title: "Reminder Updated", description: `"${reminderTitle}" has been updated.` });
+      logActivity("Task Reminders", `Reminder updated: "${reminderTitle}"`);
     } else { // Adding
       const newReminder: Reminder = {
         id: crypto.randomUUID(),
@@ -96,19 +100,31 @@ export default function TaskRemindersPage() {
         days: selectedDays,
         isActive: reminderIsActive,
       };
-      setReminders(prev => [newReminder, ...prev]);
+      setReminders(prev => [newReminder, ...prev].sort((a,b) => a.time.localeCompare(b.time)));
       toast({ title: "Reminder Added", description: `"${reminderTitle}" has been set.` });
+      logActivity("Task Reminders", `Reminder added: "${reminderTitle}"`);
     }
     setIsFormOpen(false);
   };
   
   const toggleReminderActive = (reminderId: string) => {
-    setReminders(reminders.map(r => r.id === reminderId ? { ...r, isActive: !r.isActive } : r));
+    setReminders(reminders.map(r => {
+      if (r.id === reminderId) {
+        const updatedReminder = { ...r, isActive: !r.isActive };
+        logActivity("Task Reminders", `Reminder "${updatedReminder.title}" ${updatedReminder.isActive ? 'activated' : 'deactivated'}`);
+        return updatedReminder;
+      }
+      return r;
+    }));
   };
 
   const handleDeleteReminder = (reminderId: string) => {
+    const reminderToDelete = reminders.find(r => r.id === reminderId);
     setReminders(reminders.filter(r => r.id !== reminderId));
-    toast({ variant: "destructive", title: "Reminder Deleted" });
+    if(reminderToDelete) {
+      toast({ variant: "destructive", title: "Reminder Deleted", description: `"${reminderToDelete.title}" removed.` });
+      logActivity("Task Reminders", `Reminder deleted: "${reminderToDelete.title}"`);
+    }
   };
 
   return (
@@ -156,7 +172,7 @@ export default function TaskRemindersPage() {
                   ))}
                 </div>
                  <Button variant="link" size="sm" className="p-0 h-auto mt-1" onClick={handleSetDaily}>
-                    {selectedDays.length === availableDays.length ? "Clear All Days" : "Set Daily"}
+                    {(selectedDays.length === availableDays.length && selectedDays.every(day => availableDays.includes(day))) ? "Clear All Days" : "Set Daily"}
                   </Button>
               </div>
               <div className="flex items-center space-x-2">
@@ -186,7 +202,7 @@ export default function TaskRemindersPage() {
                     <div>
                       <p className={`font-medium ${!reminder.isActive ? 'line-through' : ''}`}>{reminder.title}</p>
                       <p className="text-sm text-muted-foreground">
-                        {reminder.time} - {reminder.days.join(', ')}
+                        {reminder.time} - {reminder.days.sort((a, b) => availableDays.indexOf(a) - availableDays.indexOf(b)).join(', ')}
                       </p>
                     </div>
                   </div>
