@@ -31,10 +31,21 @@ export function LoginForm() {
         return;
     }
     try {
-      await login(email, password); // Pass password
-      router.push('/'); // Redirect to dashboard
+      await login(email, password);
+      // Successful login will trigger onAuthStateChange, which then redirects or updates UI
+      // Forcing redirect here might be too soon if profile fetching is async in onAuthStateChange.
+      // Rely on AppShell or similar to handle authenticated routes.
+      router.push('/'); 
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to login. Please try again.");
+      let errorMessage = "Failed to login. Please check your credentials and try again.";
+      if (err instanceof Error) {
+        if (err.message.includes("Invalid login credentials")) {
+          errorMessage = "Invalid email or password.";
+        } else {
+          errorMessage = err.message;
+        }
+      }
+      setError(errorMessage);
       console.error(err);
     }
   };

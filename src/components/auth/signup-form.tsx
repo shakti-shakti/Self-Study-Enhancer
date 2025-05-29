@@ -21,8 +21,8 @@ export function SignupForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [userClass, setUserClass] = useState('');
-  const [targetYear, setTargetYear] = useState('');
+  const [userClass, setUserClass] = useState(''); // Keep as empty string default
+  const [targetYear, setTargetYear] = useState(''); // Keep as empty string default
 
   const { signup, isLoading } = useAuth();
   const router = useRouter();
@@ -45,15 +45,29 @@ export function SignupForm() {
         return;
     }
     try {
-      await signup(email, name, password, userClass === "none" ? "" : userClass, targetYear === "none" ? "" : targetYear);
+      // Pass empty strings if "none" was selected, or actual values
+      const classToSave = userClass === "none" ? "" : userClass;
+      const yearToSave = targetYear === "none" ? "" : targetYear;
+
+      await signup(email, name, password, classToSave, yearToSave);
       toast({
         title: "Signup Successful!",
-        description: "Welcome to NEET Prep Pro. You are now being redirected.",
+        description: "Welcome to NEET Prep Pro. Please check your email to verify your account. You are now being redirected.",
       });
       logActivity("Auth", "User signed up successfully.", { email });
-      router.push('/'); // Redirect to dashboard
+      router.push('/'); // Redirect to dashboard or a verification pending page
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to sign up. Please try again.";
+      let errorMessage = "Failed to sign up. Please try again.";
+       if (err instanceof Error) {
+        if (err.message.includes("User already registered")) {
+            errorMessage = "This email is already registered. Please try logging in.";
+        } else if (err.message.includes("rate limit")) {
+            errorMessage = "Too many signup attempts. Please try again later.";
+        }
+         else {
+            errorMessage = err.message;
+        }
+      }
       setError(errorMessage);
       logActivity("Auth Error", "Signup failed.", { email, error: errorMessage });
       console.error(err);
