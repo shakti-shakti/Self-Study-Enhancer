@@ -38,7 +38,7 @@ export default function QuestionGeneratorPage() {
   const [subject, setSubject] = useState('physics'); // Default to Physics
   const [topic, setTopic] = useState('');
   const [source, setSource] = useState('ncert'); // Default to NCERT
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | ''>('');
+  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'any'>('any');
   
   const [generatedData, setGeneratedData] = useState<GenerateRandomQuestionOutput | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -89,7 +89,8 @@ export default function QuestionGeneratorPage() {
         subject,
         topic,
         source,
-        ...(difficulty && { difficulty }), 
+        // Only include difficulty if it's not 'any'
+        ...(difficulty && difficulty !== 'any' && { difficulty: difficulty as 'easy' | 'medium' | 'hard' }),
       };
       const output = await generateRandomQuestion(input);
       setGeneratedData(output);
@@ -254,10 +255,10 @@ export default function QuestionGeneratorPage() {
             </div>
              <div>
               <Label htmlFor="difficulty-select">Difficulty (Optional)</Label>
-              <Select value={difficulty} onValueChange={(value) => setDifficulty(value as 'easy' | 'medium' | 'hard' | '')} disabled={isLoading}>
+              <Select value={difficulty} onValueChange={(value) => setDifficulty(value as 'easy' | 'medium' | 'hard' | 'any')} disabled={isLoading}>
                 <SelectTrigger id="difficulty-select"><SelectValue placeholder="Any Difficulty" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Any Difficulty</SelectItem>
+                  <SelectItem value="any">Any Difficulty</SelectItem>
                   <SelectItem value="easy">Easy</SelectItem>
                   <SelectItem value="medium">Medium</SelectItem>
                   <SelectItem value="hard">Hard</SelectItem>
@@ -363,3 +364,5 @@ export default function QuestionGeneratorPage() {
     </div>
   );
 }
+
+    
