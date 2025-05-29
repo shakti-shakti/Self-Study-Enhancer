@@ -41,7 +41,10 @@ export function LoginForm() {
       if (err instanceof Error) {
         if (err.message.includes("Invalid login credentials")) {
           errorMessage = "Invalid email or password.";
-        } else {
+        } else if (err.message.toLowerCase().includes("email not confirmed")) {
+          errorMessage = "Login failed. Please check your email inbox (and spam folder) to confirm your email address before logging in.";
+        }
+         else {
           errorMessage = err.message;
         }
       }
