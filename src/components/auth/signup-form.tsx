@@ -51,11 +51,21 @@ export function SignupForm() {
 
       await signup(email, name, password, classToSave, yearToSave);
       toast({
-        title: "Signup Successful!",
-        description: "Welcome to NEET Prep Pro. Please check your email to verify your account. You are now being redirected.",
+        title: "✅ Registration Successful!",
+        description: (
+          <div>
+            <p className="font-semibold">Please check your email inbox (and spam folder) for a verification link from Supabase to activate your account.</p>
+            <p className="mt-2 text-xs text-muted-foreground">You will be redirected shortly once your session is active.</p>
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              Note: If confirmation links go to `localhost:3000`, ensure your Supabase "Site URL" (Authentication &gt; URL Configuration) is set to `http://localhost:9002` (or your app's actual dev port).
+            </p>
+          </div>
+        ),
+        duration: 10000, // Keep toast visible for 10 seconds
       });
-      logActivity("Auth", "User signed up successfully.", { email });
-      router.push('/'); // Redirect to dashboard or a verification pending page
+      logActivity("Auth", "User signed up successfully, verification email sent.", { email });
+      // Redirection is handled by AuthProvider onAuthStateChange
+      // router.push('/'); 
     } catch (err) {
       let errorMessage = "Failed to sign up. Please try again.";
        if (err instanceof Error) {
