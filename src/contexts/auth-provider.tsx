@@ -4,7 +4,7 @@
 import type { ReactNode } from 'react';
 import React, { createContext, useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import type { AuthChangeEvent, Session, User as SupabaseUserType } from '@supabase/supabase-js';
+import type { AuthChangeEvent, Session, User as SupabaseUserType, PostgrestError } from '@supabase/supabase-js';
 import { logActivity } from '@/lib/activity-logger';
 
 export interface AppUser {
@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const fetchUserProfile = useCallback(async (sbUser: SupabaseUserType): Promise<AppUser | null> => {
     if (!sbUser) return null;
     try {
+      logActivity("Profile Fetch", `Fetching profile for user: ${sbUser.id}`);
       const { data: profile, error } = await supabase
         .from('profiles')
         .select('*')
@@ -46,33 +47,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (error && error.code !== 'PGRST116') { // PGRST116: single row not found
         console.error('Error fetching profile:', error.message || error);
-        logActivity("Supabase Error", "Error fetching user profile", { userId: sbUser.id, error: error.message });
-        return null;
+        logActivity("Supabase Error", "Error fetching user profile", { userId: sbUser.id, error_message: error.message, error_details: error.details });
+        return { // Return a basic AppUser object from auth data if profile fetch fails
+          id: sbUser.id,
+          email: sbUser.email || null,
+          name: sbUser.user_metadata?.name || sbUser.email?.split('@')[0] || "User",
+          avatar_url: sbUser.user_metadata?.avatar_url || undefined,
+        };
       }
       if (profile) {
+         logActivity("Profile Success", `Profile successfully fetched for user: ${sbUser.id}`, {name: profile.name});
         return {
           id: sbUser.id,
-          email: sbUser.email || profile.email,
-          name: profile.name || sbUser.user_metadata?.name,
+          email: sbUser.email || profile.email, // Prioritize auth email
+          name: profile.name || sbUser.user_metadata?.name || sbUser.email?.split('@')[0] || "User",
           avatar_url: profile.avatar_url || sbUser.user_metadata?.avatar_url,
           class: profile.class,
           target_year: profile.target_year,
-          ...profile,
         };
       }
-      // If profile is null but no error (PGRST116), it means profile doesn't exist yet.
-      // This is expected immediately after signup if profile creation is a separate step or pending.
-      logActivity("Profile Info", "No profile found for user, might be new signup.", { userId: sbUser.id });
-      return { // Return a basic AppUser object from auth data if profile doesn't exist
+      logActivity("Profile Info", "No profile found for user in 'profiles' table, might be new signup or data mismatch.", { userId: sbUser.id });
+      return { // Return a basic AppUser object from auth data if profile doesn't exist in 'profiles' table
         id: sbUser.id,
         email: sbUser.email || null,
-        name: sbUser.user_metadata?.name || null,
+        name: sbUser.user_metadata?.name || sbUser.email?.split('@')[0] || "User",
         avatar_url: sbUser.user_metadata?.avatar_url || undefined,
       };
     } catch (e) {
       console.error('Exception in fetchUserProfile:', (e as Error).message || e);
       logActivity("Supabase Exception", "Exception fetching user profile", { userId: sbUser.id, error: (e as Error).message });
-      return null;
+       return { // Return a basic AppUser object from auth data on any exception
+        id: sbUser.id,
+        email: sbUser.email || null,
+        name: sbUser.user_metadata?.name || sbUser.email?.split('@')[0] || "User",
+        avatar_url: sbUser.user_metadata?.avatar_url || undefined,
+      };
     }
   }, []);
 
@@ -83,9 +92,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (session?.user) {
         setSupabaseUser(session.user);
         const profile = await fetchUserProfile(session.user);
-        setAppUser(profile); // Set appUser, even if profile is basic from auth data
-        if (profile && profile.name) { // Check if full profile was loaded
-           logActivity("Auth", "User session restored and profile loaded.", { uid: session.user.id });
+        setAppUser(profile);
+        if (profile && profile.name) {
+           logActivity("Auth", "User session restored and profile loaded.", { uid: session.user.id, name: profile.name });
         } else {
            logActivity("Auth Warning", "User session restored, basic profile data set. Full profile might be pending or missing.", { uid: session.user.id });
         }
@@ -101,12 +110,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (currentSupabaseUser) {
           const profile = await fetchUserProfile(currentSupabaseUser);
-          setAppUser(profile); // Always set AppUser based on fetched profile or auth data
+          setAppUser(profile);
 
           if (event === 'SIGNED_IN') {
-            logActivity("Auth", "User signed in.", { uid: currentSupabaseUser.id });
+            logActivity("Auth", "User signed in.", { uid: currentSupabaseUser.id, email: currentSupabaseUser.email });
           } else if (event === 'USER_UPDATED' && profile) {
-            logActivity("Auth", "User data updated.", { uid: currentSupabaseUser.id });
+            logActivity("Auth", "User data updated.", { uid: currentSupabaseUser.id, name: profile.name });
+          } else if (event === 'TOKEN_REFRESHED') {
+            logActivity("Auth", "Token refreshed.", { uid: currentSupabaseUser.id});
           }
         } else {
           setAppUser(null);
@@ -129,12 +140,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       // onAuthStateChanged will handle setting user state and fetching profile
-      logActivity("Auth", "Login attempt successful.", { email });
+      logActivity("Auth", "Login attempt successful (Supabase).", { email });
     } catch (error) {
-      logActivity("Auth Error", "Login attempt failed.", { email, error: (error as Error).message });
-      throw error; // Re-throw to be caught by the form
+      logActivity("Auth Error", "Login attempt failed (Supabase).", { email, error_message: (error as Error).message });
+      throw error; 
     } finally {
-      setIsLoading(false); // Ensure loading is stopped if onAuthStateChange doesn't fire quickly
+      setIsLoading(false); 
     }
   }, []);
 
@@ -155,66 +166,103 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (signUpError) throw signUpError;
       if (!authData.user) throw new Error("Signup completed but no user data returned from Supabase Auth.");
       
+      if (!authData.user.id || !authData.user.email) {
+        console.error("Critical error: User ID or Email missing after signup from Supabase Auth.", authData.user);
+        logActivity("Auth Critical Error", "User ID or Email missing after signup from Supabase Auth.", { user: authData.user });
+        throw new Error("User ID or Email missing after signup, cannot create profile.");
+      }
+
       const classToSave = userClassProp === "none" ? null : userClassProp;
       const yearToSave = targetYearProp === "none" ? null : targetYearProp;
 
-      // Create user profile in 'profiles' table
+      const profilePayload = {
+        id: authData.user.id,
+        email: authData.user.email,
+        name: name,
+        avatar_url: authData.user.user_metadata?.avatar_url || `https://placehold.co/100x100.png?text=${name ? name.charAt(0).toUpperCase() : 'U'}`,
+        class: classToSave,
+        target_year: yearToSave,
+        updated_at: new Date().toISOString(),
+      };
+      
+      logActivity("Profile Creation Attempt", "Attempting to create profile in Supabase 'profiles' table.", { userId: authData.user.id, payload: profilePayload });
+
       const { error: profileError } = await supabase
         .from('profiles')
-        .insert({
-          id: authData.user.id,
-          email: authData.user.email,
-          name: name,
-          avatar_url: authData.user.user_metadata?.avatar_url || `https://placehold.co/100x100.png?text=${name ? name.charAt(0).toUpperCase() : 'U'}`,
-          class: classToSave,
-          target_year: yearToSave,
-          updated_at: new Date().toISOString(),
-        });
+        .insert(profilePayload);
 
       if (profileError) {
-        console.error(
-          "Error creating profile after signup. Message:", profileError.message, 
-          "Details:", profileError.details, 
-          "Hint:", profileError.hint, 
-          "Code:", profileError.code,
-          "Full Error:", JSON.stringify(profileError, null, 2)
-        );
-        logActivity("Auth Error", "Signup succeeded in Auth, but profile creation failed.", { uid: authData.user.id, error: profileError.message, details: profileError.details });
+        console.error("PROFILE CREATION FAILED.");
+        console.error("Type of profileError:", typeof profileError);
+        console.error("Keys in profileError:", Object.keys(profileError));
+        console.error("Raw profileError object:", profileError);
+        
+        let detailedMessage = "Error creating profile. ";
+        if (profileError.message) {
+          detailedMessage += `Message: ${profileError.message}. `;
+        }
+        if ((profileError as PostgrestError).details) {
+          detailedMessage += `Details: ${(profileError as PostgrestError).details}. `;
+        }
+        if ((profileError as PostgrestError).code) {
+          detailedMessage += `Code: ${(profileError as PostgrestError).code}. `;
+        }
+        if ((profileError as PostgrestError).hint) {
+          detailedMessage += `Hint: ${(profileError as PostgrestError).hint}. `;
+        }
+        if (Object.keys(profileError).length === 0 && typeof profileError === 'object') {
+            detailedMessage += "The error object received was empty. This often points to RLS issues or table/column misconfigurations in Supabase. Please check your Supabase dashboard logs (Database and PostgREST) and RLS policies for the 'profiles' table.";
+        }
+        console.error(detailedMessage);
+        
+        logActivity("Auth Error", "Signup succeeded in Auth, but profile creation failed.", { 
+          uid: authData.user.id, 
+          supa_error_message: profileError.message || "N/A",
+          supa_error_details: (profileError as PostgrestError).details || "N/A",
+          supa_error_code: (profileError as PostgrestError).code || "N/A",
+          supa_error_hint: (profileError as PostgrestError).hint || "N/A",
+          raw_error_string: JSON.stringify(profileError) 
+        });
         throw profileError; 
       }
       
-      // onAuthStateChanged will set the appUser state.
-      // We can also try to set it eagerly here if needed, but onAuthStateChange should handle it.
-      logActivity("Auth", "Signup successful and profile creation initiated.", { uid: authData.user.id, email });
+      logActivity("Auth", "Signup successful and profile created.", { uid: authData.user.id, email });
+      // onAuthStateChanged will set the appUser state after this.
+
     } catch (error) {
-      logActivity("Auth Error", "Signup failed.", { email, error: (error as Error).message });
+      // This catch block handles errors from supabase.auth.signUp AND errors re-thrown from profile creation
+      console.error("Overall signup process error:", error);
+      logActivity("Auth Error", "Signup process failed.", { email, error_message: (error as Error).message, raw_error: JSON.stringify(error) });
       throw error; // Re-throw to be caught by the form
     } finally {
-      setIsLoading(false); // Ensure loading is stopped
+      setIsLoading(false);
     }
   }, []);
 
   const logout = useCallback(async () => {
     setIsLoading(true);
+    const currentUserId = supabaseUser?.id;
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      setAppUser(null); // Explicitly clear user state on logout
+      setAppUser(null); 
       setSupabaseUser(null);
+      logActivity("Auth", "User signed out successfully.", { uid: currentUserId });
     } catch (error) {
       console.error("Error signing out: ", (error as Error).message || error);
-      logActivity("Auth Error", "Logout failed.", { error: (error as Error).message });
+      logActivity("Auth Error", "Logout failed.", { uid: currentUserId, error: (error as Error).message });
     } finally {
        setIsLoading(false);
     }
-  }, []);
+  }, [supabaseUser]);
 
   const updateUserProfile = useCallback(async (profileData: Partial<Omit<AppUser, 'id' | 'email'>>) => {
-    if (!supabaseUser) throw new Error("User not authenticated");
+    if (!supabaseUser) throw new Error("User not authenticated for profile update.");
     setIsLoading(true);
     try {
       const updates = {
         ...profileData,
+        id: supabaseUser.id, // Ensure ID is part of updates for .upsert or if .update uses it in RLS
         updated_at: new Date().toISOString(),
       };
 
@@ -225,16 +273,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (error) throw error;
 
-      const authUpdates: { data?: any; } = {};
-      if ('name' in profileData && profileData.name !== supabaseUser.user_metadata?.name) {
-        authUpdates.data = { ...(authUpdates.data || {}), name: profileData.name };
+      const authUserMetadataUpdates: { data?: Record<string, any> } = { data: {} };
+      let metadataChanged = false;
+      if ('name' in profileData && profileData.name !== (appUser?.name || supabaseUser.user_metadata?.name)) {
+        authUserMetadataUpdates.data!.name = profileData.name;
+        metadataChanged = true;
       }
-      if ('avatar_url' in profileData && profileData.avatar_url !== supabaseUser.user_metadata?.avatar_url) {
-         authUpdates.data = { ...(authUpdates.data || {}), avatar_url: profileData.avatar_url };
+      if ('avatar_url' in profileData && profileData.avatar_url !== (appUser?.avatar_url || supabaseUser.user_metadata?.avatar_url)) {
+         authUserMetadataUpdates.data!.avatar_url = profileData.avatar_url;
+         metadataChanged = true;
       }
 
-      if (Object.keys(authUpdates).length > 0 && authUpdates.data) {
-        const { data: updatedAuthUser, error: authUpdateError } = await supabase.auth.updateUser(authUpdates);
+      if (metadataChanged) {
+        const { data: updatedAuthUser, error: authUpdateError } = await supabase.auth.updateUser(authUserMetadataUpdates);
         if (authUpdateError) {
           console.warn("Profile table updated, but Supabase Auth user_metadata update failed:", authUpdateError.message);
           logActivity("Profile Warning", "Failed to update Supabase Auth user_metadata.", { uid: supabaseUser.id, error: authUpdateError.message });
@@ -242,7 +293,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if(updatedAuthUser?.user) setSupabaseUser(updatedAuthUser.user); 
       }
       
-      setAppUser(prev => prev ? { ...prev, ...profileData, id: prev.id, email: prev.email } : null);
+      // Refetch profile to ensure local state is perfectly synced with DB, especially after RLS policies run
+      const refreshedProfile = await fetchUserProfile(supabaseUser);
+      setAppUser(refreshedProfile);
       logActivity("Profile", "User profile updated in Supabase.", { uid: supabaseUser.id, updates: Object.keys(profileData) });
     } catch (error) {
       logActivity("Profile Error", "User profile update failed.", { uid: supabaseUser.id, error: (error as Error).message });
@@ -250,11 +303,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [supabaseUser]);
+  }, [supabaseUser, appUser, fetchUserProfile]);
 
   return (
     <AuthContext.Provider value={{ 
-      isAuthenticated: !!supabaseUser && !!appUser, 
+      isAuthenticated: !!supabaseUser && !!appUser, // Check for both supabaseUser and appUser
       user: appUser, 
       supabaseUser, 
       isLoading, 
