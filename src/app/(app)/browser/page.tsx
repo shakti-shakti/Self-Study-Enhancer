@@ -6,6 +6,7 @@ import { Globe, Search, RefreshCw, ArrowLeft, ArrowRight, ExternalLink } from "l
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from '@/hooks/use-toast';
+import { logActivity } from '@/lib/activity-logger';
 
 export default function BrowserPage() {
   const { toast } = useToast();
@@ -29,6 +30,7 @@ export default function BrowserPage() {
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
     setInputValue(finalUrl); // Update input field with the actual URL being loaded
+    logActivity("Browser", `Navigated to URL (or search): ${finalUrl.substring(0,100)}`);
   };
 
   const handleSearch = () => {
@@ -38,6 +40,7 @@ export default function BrowserPage() {
   const handleRefresh = () => {
     if (iframeRef.current) {
       iframeRef.current.src = iframeRef.current.src; // Simple way to refresh iframe
+      logActivity("Browser", `Refreshed URL: ${iframeRef.current.src.substring(0,100)}`);
     }
   };
 
@@ -47,6 +50,7 @@ export default function BrowserPage() {
       setHistoryIndex(newIndex);
       setUrl(history[newIndex]);
       setInputValue(history[newIndex]);
+      logActivity("Browser", `Navigated back to: ${history[newIndex].substring(0,100)}`);
     }
   };
 
@@ -56,13 +60,25 @@ export default function BrowserPage() {
       setHistoryIndex(newIndex);
       setUrl(history[newIndex]);
       setInputValue(history[newIndex]);
+      logActivity("Browser", `Navigated forward to: ${history[newIndex].substring(0,100)}`);
     }
   };
   
   const openInNewTab = () => {
     if (url) {
       window.open(url, '_blank', 'noopener,noreferrer');
+      logActivity("Browser", `Opened in new tab: ${url.substring(0,100)}`);
     }
+  }
+
+  const handleIframeError = () => {
+    toast({
+      variant: "destructive",
+      title: "Content Load Error",
+      description: "Could not load content. Many websites (like YouTube) restrict embedding. Try opening the page in a new tab using the button above.",
+      duration: 7000,
+    });
+    logActivity("Browser Error", `Iframe load error for URL: ${url.substring(0,100)}`);
   }
 
   return (
@@ -74,7 +90,7 @@ export default function BrowserPage() {
       <Card className="flex-1 flex flex-col shadow-lg">
         <CardHeader>
           <CardTitle>In-App Web Search</CardTitle>
-          <CardDescription>Search doubts on Google, watch YouTube lectures, and access online resources without leaving the app.</CardDescription>
+          <CardDescription>Search doubts on Google, watch lectures (if embeddable), and access online resources. For sites that block embedding (like YouTube), use the "Open in new tab" button.</CardDescription>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col space-y-4">
           <div className="flex items-center space-x-2">
@@ -100,19 +116,19 @@ export default function BrowserPage() {
               src={url}
               title="Mini Browser Content"
               className="w-full h-full border-0"
-              sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-same-origin allow-scripts" // Security for iframe
-              onError={() => {
-                toast({
-                  variant: "destructive",
-                  title: "Content Load Error",
-                  description: "Could not load content. Some websites restrict embedding. Try opening in a new tab.",
-                });
-              }}
+              sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts" // Added allow-popups-to-escape-sandbox
+              onError={handleIframeError}
+              onLoad={() => logActivity("Browser", `Successfully loaded: ${url.substring(0,100)} in iframe.`)}
             />
           </div>
-          <p className="text-xs text-muted-foreground mt-1">Note: Some websites may not work correctly within this embedded browser due to security restrictions (e.g., X-Frame-Options). Use the "Open in new tab" button if needed.</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Note: Some websites (e.g., YouTube, many news sites) may not work correctly or at all within this embedded browser due to their security policies (X-Frame-Options or CSP). 
+            If a site doesn't load or function as expected, please use the <ExternalLink className="inline h-3 w-3 mx-0.5"/> "Open in new tab" button. The `igu=1` parameter is automatically added to Google URLs to improve compatibility.
+          </p>
         </CardContent>
       </Card>
     </div>
   );
 }
+
+    
