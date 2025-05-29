@@ -146,40 +146,57 @@ export default function QuestionGeneratorPage() {
   };
 
   const handleNextQuestion = async () => {
-    if (selectedAnswer === undefined && currentQuestionIndex < currentQuestionSet.length) { // Check if there is a question to answer
+    if (selectedAnswer === undefined && currentQuestionIndex < currentQuestionSet.length) { 
         toast({variant: "destructive", title: "No Answer Selected", description: "Please select an answer before proceeding."});
         return;
     }
 
-    const updatedCurrentQuestionSet = [...currentQuestionSet];
-    if (currentQuestionIndex < updatedCurrentQuestionSet.length) { // Ensure current question exists
-        updatedCurrentQuestionSet[currentQuestionIndex].userAnswerIndex = parseInt(selectedAnswer!, 10);
-        updatedCurrentQuestionSet[currentQuestionIndex].isCorrect = 
-            updatedCurrentQuestionSet[currentQuestionIndex].userAnswerIndex === updatedCurrentQuestionSet[currentQuestionIndex].correctAnswerIndex;
+    const updatedQuestionSet = [...currentQuestionSet];
+    if (currentQuestionIndex < updatedQuestionSet.length) { 
+        const currentQ = updatedQuestionSet[currentQuestionIndex];
+        currentQ.userAnswerIndex = parseInt(selectedAnswer!, 10);
+        currentQ.isCorrect = currentQ.userAnswerIndex === currentQ.correctAnswerIndex;
         
-        if (updatedCurrentQuestionSet[currentQuestionIndex].isCorrect) {
+        if (currentQ.isCorrect) {
             setScore(prevScore => prevScore + 1);
         }
     }
-    setCurrentQuestionSet(updatedCurrentQuestionSet);
+    // setCurrentQuestionSet(updatedQuestionSet); // Set this after potential new question fetch
 
     if (currentQuestionIndex < numberOfQuestions - 1) {
       setSelectedAnswer(undefined);
-      setCurrentQuestionIndex(prevIndex => prevIndex + 1);
-      if (currentQuestionIndex + 1 >= updatedCurrentQuestionSet.length) {
+      const nextQIndex = currentQuestionIndex + 1;
+      setCurrentQuestionIndex(nextQIndex);
+
+      if (nextQIndex >= updatedQuestionSet.length) { // Fetch new question if we don't have it
         const nextQ = await fetchNewQuestion();
         if (nextQ) {
           setCurrentQuestionSet(prevSet => [...prevSet, nextQ]);
         } else {
           toast({variant: "destructive", title: "Failed to load next question", description: "You can review your current progress or restart."});
-          setQuizState('completed');
+          setQuizState('completed'); // End quiz if question fails to load
           logActivity("Quiz Error", "Failed to load next question mid-quiz", { attempted: currentQuestionIndex + 1});
+          // Save score with currently answered questions
+          const finalTotalQuestions = updatedQuestionSet.length;
+          const finalAccuracy = finalTotalQuestions > 0 ? (score / finalTotalQuestions) * 100 : 0;
+          const newLastScore: LastQuizScore = {
+              score: score, // Score up to this point
+              totalQuestions: finalTotalQuestions,
+              accuracy: finalAccuracy,
+              timestamp: new Date().toISOString(),
+          };
+          saveToLocalStorage(LAST_QUIZ_SCORE_KEY, newLastScore);
+          setLastQuizScore(newLastScore);
           return;
         }
+      } else {
+         setCurrentQuestionSet(updatedQuestionSet); // If question already exists, just update state
       }
     } else {
-      const finalScore = updatedCurrentQuestionSet[currentQuestionIndex]?.isCorrect ? score +1 : score; // Adjust score if last q was just answered
-      const finalTotalQuestions = updatedCurrentQuestionSet.length;
+      // This is the last question, mark quiz as completed
+      setCurrentQuestionSet(updatedQuestionSet); // Ensure last answer is recorded
+      const finalScore = score; // Score has been updated for the last question
+      const finalTotalQuestions = updatedQuestionSet.length;
       const finalAccuracy = finalTotalQuestions > 0 ? (finalScore / finalTotalQuestions) * 100 : 0;
       
       const newLastScore: LastQuizScore = {
@@ -329,7 +346,7 @@ export default function QuestionGeneratorPage() {
           </CardHeader>
           <CardContent>
             <h3 className="text-xl font-semibold mb-4 mt-6 text-center">Review Your Answers</h3>
-            <ScrollArea className="h-[calc(100vh-30rem)] sm:h-[calc(100vh-28rem)] md:h-[50vh] p-1 border rounded-md">
+            <ScrollArea className="h-[calc(100vh-32rem)] sm:h-[calc(100vh-30rem)] md:h-[45vh] p-1 border rounded-md">
               <div className="space-y-4 p-3">
                 {currentQuestionSet.map((q, index) => (
                   <Card key={q.id} className={`p-4 ${q.isCorrect ? 'border-green-500 bg-green-500/5' : 'border-destructive bg-destructive/5'}`}>
@@ -383,7 +400,7 @@ export default function QuestionGeneratorPage() {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Saved Individual Questions</DialogTitle>
-              <DialogDescription>Review questions you've saved. These are not quiz results.</DialogDescription>
+              <DialogDescription>Review questions you've saved. These are not quiz results. Saved on: {new Date(savedIndividualQuestions[0]?.savedAt || Date.now()).toLocaleDateString()}</DialogDescription>
             </DialogHeader>
             <ScrollArea className="max-h-[60vh] p-1 mt-2">
               {savedIndividualQuestions.length > 0 ? (
@@ -392,8 +409,8 @@ export default function QuestionGeneratorPage() {
                     <Card key={sq.id} className="bg-card/60">
                       <CardContent className="p-4 space-y-2">
                         <p className="text-sm font-semibold">Q: {sq.question}</p>
-                        <p className="text-xs">Options: {sq.options.map((o, i) => `${i+1}. ${o}`).join(" | ")}</p>
-                        <p className="text-xs text-green-400">Correct: Option {sq.correctAnswerIndex + 1} ({sq.options[sq.correctAnswerIndex]})</p>
+                        <p className="text-xs">Options: {sq.options.map((o, i) => `${String.fromCharCode(65+i)}. ${o}`).join(" | ")}</p>
+                        <p className="text-xs text-green-400">Correct: {String.fromCharCode(65+sq.correctAnswerIndex)}. {sq.options[sq.correctAnswerIndex]}</p>
                         <p className="text-xs text-muted-foreground">Expl: {sq.explanation}</p>
                         <p className="text-xs text-muted-foreground/70">Saved: {new Date(sq.savedAt).toLocaleString()}</p>
                       </CardContent>
@@ -546,3 +563,5 @@ export default function QuestionGeneratorPage() {
     </div>
   );
 }
+
+    

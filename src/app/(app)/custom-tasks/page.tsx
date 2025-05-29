@@ -2,7 +2,7 @@
 "use client";
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
-import { ClipboardList, PlusCircle, Edit2, Trash2, AlarmClock } from "lucide-react";
+import { ClipboardList, PlusCircle, Edit2, Trash2, AlarmClock, CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -20,9 +20,14 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import { useToast } from '@/hooks/use-toast';
 import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
 import { logActivity } from '@/lib/activity-logger';
+import { format, parseISO } from 'date-fns';
+import { cn } from '@/lib/utils';
+
 
 interface CustomTask {
   id: string;
@@ -30,6 +35,7 @@ interface CustomTask {
   description?: string;
   completed: boolean;
   category: string;
+  date?: string; // Optional specific date
   reminderTime?: string;
   hasReminder?: boolean;
 }
@@ -46,6 +52,7 @@ export default function CustomTasksPage() {
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
   const [taskCategory, setTaskCategory] = useState(taskCategories[0]);
+  const [taskDate, setTaskDate] = useState<Date | undefined>(undefined);
   const [taskHasReminder, setTaskHasReminder] = useState(false);
   const [taskReminderTime, setTaskReminderTime] = useState('');
 
@@ -65,6 +72,7 @@ export default function CustomTasksPage() {
       setTaskTitle(task.title);
       setTaskDescription(task.description || '');
       setTaskCategory(task.category);
+      setTaskDate(task.date ? parseISO(task.date) : undefined);
       setTaskHasReminder(task.hasReminder || false);
       setTaskReminderTime(task.reminderTime || '');
     } else {
@@ -72,6 +80,7 @@ export default function CustomTasksPage() {
       setTaskTitle('');
       setTaskDescription('');
       setTaskCategory(taskCategories[0]);
+      setTaskDate(undefined); // Default to no specific date
       setTaskHasReminder(false);
       setTaskReminderTime('09:00');
     }
@@ -92,6 +101,7 @@ export default function CustomTasksPage() {
         title: taskTitle,
         description: taskDescription,
         category: taskCategory,
+        date: taskDate ? taskDate.toISOString() : undefined,
         hasReminder: taskHasReminder,
         reminderTime: taskHasReminder ? taskReminderTime : undefined,
     };
@@ -166,7 +176,7 @@ export default function CustomTasksPage() {
               </div>
               <div>
                 <Label htmlFor="custom-task-description">Description (Optional)</Label>
-                <Textarea id="custom-task-description" value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} placeholder="Add more details..." />
+                <Textarea id="custom-task-description" value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} placeholder="Add more details..." className="min-h-[100px]"/>
               </div>
               <div>
                 <Label htmlFor="custom-task-category">Category</Label>
@@ -181,14 +191,41 @@ export default function CustomTasksPage() {
                   </SelectContent>
                 </Select>
               </div>
+               <div>
+                <Label htmlFor="custom-task-date">Date (Optional)</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="custom-task-date"
+                      variant={"outline"}
+                      className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !taskDate && "text-muted-foreground"
+                      )}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {taskDate ? format(taskDate, "PPP") : <span>Pick a date (optional)</span>}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={taskDate}
+                      onSelect={setTaskDate}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
               <div className="flex items-center space-x-2 pt-2">
                 <Switch id="custom-task-reminder-enabled" checked={taskHasReminder} onCheckedChange={setTaskHasReminder}/>
-                <Label htmlFor="custom-task-reminder-enabled">Set Reminder (Optional)</Label>
+                <Label htmlFor="custom-task-reminder-enabled">Set Reminder (Visual Only)</Label>
               </div>
               {taskHasReminder && (
                 <div>
                   <Label htmlFor="custom-task-reminder-time">Reminder Time</Label>
                   <Input id="custom-task-reminder-time" type="time" value={taskReminderTime} onChange={(e) => setTaskReminderTime(e.target.value)} />
+                  <p className="text-xs text-muted-foreground mt-1">Note: This is a visual reminder in the app; no system alarm will sound.</p>
                 </div>
               )}
             </div>
@@ -215,7 +252,10 @@ export default function CustomTasksPage() {
                       <Label htmlFor={`custom-task-${task.id}`} className={`font-medium ${task.completed ? 'line-through text-muted-foreground' : ''}`}>
                         {task.title}
                       </Label>
-                      <p className="text-xs text-muted-foreground">{task.category}</p>
+                       <div className="text-xs text-muted-foreground">
+                        <span>{task.category}</span>
+                        {task.date && <span> - {format(parseISO(task.date), "EEE, MMM d")}</span>}
+                       </div>
                       {task.description && <p className="text-sm mt-1 text-muted-foreground/80 whitespace-pre-wrap">{task.description}</p>}
                       {task.hasReminder && task.reminderTime && (
                         <div className="flex items-center text-xs text-accent mt-1">
@@ -241,3 +281,5 @@ export default function CustomTasksPage() {
     </div>
   );
 }
+
+    

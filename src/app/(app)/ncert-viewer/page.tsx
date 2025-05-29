@@ -9,27 +9,31 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { logActivity } from '@/lib/activity-logger';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
-
+// Note: These URLs should point to actual, publicly accessible PDF files for full functionality.
+// Many NCERT PDFs are in ZIPs, so direct chapter PDFs are better if available.
+// For a real app, this data would come from a database or a more robust source.
 const bookPdfUrls: Record<string, string> = {
   "physics_xi_part1": "https://ncert.nic.in/textbook/pdf/keph1ps.zip", 
   "physics_xi_part2": "https://ncert.nic.in/textbook/pdf/keph2ps.zip", 
   "chemistry_xi_part1": "https://ncert.nic.in/textbook/pdf/kech1ps.zip",
   "biology_xi": "https://ncert.nic.in/textbook/pdf/kebl1ps.zip",
-  // Using general textbook page as fallback if specific book ZIP not known
-  "physics_xii_part1": "https://ncert.nic.in/textbook.php",
-  "chemistry_xii_part1": "https://ncert.nic.in/textbook.php",
-  "biology_xii": "https://ncert.nic.in/textbook.php",
+  "physics_xii_part1": "https://ncert.nic.in/textbook/pdf/leph1ps.zip",
+  "physics_xii_part2": "https://ncert.nic.in/textbook/pdf/leph2ps.zip",
+  "chemistry_xii_part1": "https://ncert.nic.in/textbook/pdf/lech1ps.zip",
+  "biology_xii": "https://ncert.nic.in/textbook/pdf/lebl1ps.zip",
 };
 
 const chapterPdfLinks: Record<string, string> = {
-    "physics_xi_part1_0": "https://ncert.nic.in/textbook/pdf/keph101.pdf", 
-    "physics_xi_part1_1": "https://ncert.nic.in/textbook/pdf/keph102.pdf", 
-    "physics_xi_part1_2": "https://ncert.nic.in/textbook/pdf/keph103.pdf", 
-    "chemistry_xi_part1_0": "https://ncert.nic.in/textbook/pdf/kech101.pdf", 
-    "chemistry_xi_part1_1": "https://ncert.nic.in/textbook/pdf/kech102.pdf", 
-    "biology_xi_0": "https://ncert.nic.in/textbook/pdf/kebl101.pdf", 
-    "biology_xi_1": "https://ncert.nic.in/textbook/pdf/kebl102.pdf", 
-    // Add more direct chapter PDF links as available. These are examples.
+    "physics_xi_part1_ch1": "https://ncert.nic.in/textbook/pdf/keph101.pdf", 
+    "physics_xi_part1_ch2": "https://ncert.nic.in/textbook/pdf/keph102.pdf", 
+    "physics_xi_part1_ch3": "https://ncert.nic.in/textbook/pdf/keph103.pdf", 
+    "chemistry_xi_part1_ch1": "https://ncert.nic.in/textbook/pdf/kech101.pdf", 
+    "chemistry_xi_part1_ch2": "https://ncert.nic.in/textbook/pdf/kech102.pdf", 
+    "biology_xi_ch1": "https://ncert.nic.in/textbook/pdf/kebl101.pdf", 
+    "biology_xi_ch2": "https://ncert.nic.in/textbook/pdf/kebl102.pdf", 
+    "physics_xii_part1_ch1": "https://ncert.nic.in/textbook/pdf/leph101.pdf",
+    "chemistry_xii_part1_ch1": "https://ncert.nic.in/textbook/pdf/lech101.pdf",
+    "biology_xii_ch1": "https://ncert.nic.in/textbook/pdf/lebl101.pdf",
 };
 
 interface Chapter {
@@ -44,40 +48,59 @@ interface Book {
   fullBookDownloadUrl?: string; 
 }
 
-
 const availableBooks: Book[] = [
   { 
-    id: "physics_xi_part1", 
-    name: "Physics XI - Part 1", 
+    id: "physics_xi_part1", name: "Physics XI - Part 1", 
     chapters: [
-      { id: "physics_xi_part1_0", name: "Chapter 1: Physical World", mockContent: ["Content for Physics XI, Ch1...", "More details..."] },
-      { id: "physics_xi_part1_1", name: "Chapter 2: Units and Measurement", mockContent: ["Content for Physics XI, Ch2..."] },
-      { id: "physics_xi_part1_2", name: "Chapter 3: Motion in a Straight Line" },
-      { id: "physics_xi_part1_3", name: "Chapter 4: Motion in a Plane" },
-      { id: "physics_xi_part1_4", name: "Chapter 5: Laws of Motion" },
+      { id: "physics_xi_part1_ch1", name: "Chapter 1: Physical World", mockContent: ["Content for Physics XI, Ch1...", "More details..."] },
+      { id: "physics_xi_part1_ch2", name: "Chapter 2: Units and Measurement", mockContent: ["Content for Physics XI, Ch2..."] },
+      { id: "physics_xi_part1_ch3", name: "Chapter 3: Motion in a Straight Line" },
+      { id: "physics_xi_part1_ch4", name: "Chapter 4: Motion in a Plane" },
+      { id: "physics_xi_part1_ch5", name: "Chapter 5: Laws of Motion" },
     ],
-    fullBookDownloadUrl: bookPdfUrls["physics_xi_part1"] || "https://ncert.nic.in/textbook.php"
+    fullBookDownloadUrl: bookPdfUrls["physics_xi_part1"]
   },
    { 
-    id: "chemistry_xi_part1", 
-    name: "Chemistry XI - Part 1", 
+    id: "chemistry_xi_part1", name: "Chemistry XI - Part 1", 
     chapters: [
-        {id: "chemistry_xi_part1_0", name: "Chapter 1: Some Basic Concepts of Chemistry", mockContent: ["Content for Chemistry XI, Ch1..."]},
-        {id: "chemistry_xi_part1_1", name: "Chapter 2: Structure of Atom"},
-        {id: "chemistry_xi_part1_2", name: "Chapter 3: Classification of Elements"},
+        {id: "chemistry_xi_part1_ch1", name: "Chapter 1: Some Basic Concepts of Chemistry", mockContent: ["Content for Chemistry XI, Ch1..."]},
+        {id: "chemistry_xi_part1_ch2", name: "Chapter 2: Structure of Atom"},
+        {id: "chemistry_xi_part1_ch3", name: "Chapter 3: Classification of Elements"},
     ],
-    fullBookDownloadUrl: bookPdfUrls["chemistry_xi_part1"] || "https://ncert.nic.in/textbook.php"
+    fullBookDownloadUrl: bookPdfUrls["chemistry_xi_part1"]
   },
   { 
-    id: "biology_xi", 
-    name: "Biology XI", 
+    id: "biology_xi", name: "Biology XI", 
     chapters: [
-        {id: "biology_xi_0", name: "Chapter 1: The Living World", mockContent: ["Content for Biology XI, Ch1..."]},
-        {id: "biology_xi_1", name: "Chapter 2: Biological Classification"},
-        {id: "biology_xi_2", name: "Chapter 3: Plant Kingdom"},
-        {id: "biology_xi_3", name: "Chapter 4: Animal Kingdom"},
+        {id: "biology_xi_ch1", name: "Chapter 1: The Living World", mockContent: ["Content for Biology XI, Ch1..."]},
+        {id: "biology_xi_ch2", name: "Chapter 2: Biological Classification"},
+        {id: "biology_xi_ch3", name: "Chapter 3: Plant Kingdom"},
     ],
-    fullBookDownloadUrl: bookPdfUrls["biology_xi"] || "https://ncert.nic.in/textbook.php"
+    fullBookDownloadUrl: bookPdfUrls["biology_xi"]
+  },
+  { 
+    id: "physics_xii_part1", name: "Physics XII - Part 1", 
+    chapters: [
+      { id: "physics_xii_part1_ch1", name: "Chapter 1: Electric Charges and Fields"},
+      { id: "physics_xii_part1_ch2", name: "Chapter 2: Electrostatic Potential and Capacitance"},
+    ],
+    fullBookDownloadUrl: bookPdfUrls["physics_xii_part1"]
+  },
+  { 
+    id: "chemistry_xii_part1", name: "Chemistry XII - Part 1", 
+    chapters: [
+        {id: "chemistry_xii_part1_ch1", name: "Chapter 1: Solutions"},
+        {id: "chemistry_xii_part1_ch2", name: "Chapter 2: Electrochemistry"},
+    ],
+    fullBookDownloadUrl: bookPdfUrls["chemistry_xii_part1"]
+  },
+  { 
+    id: "biology_xii", name: "Biology XII", 
+    chapters: [
+        {id: "biology_xii_ch1", name: "Chapter 1: Reproduction in Organisms"},
+        {id: "biology_xii_ch2", name: "Chapter 2: Sexual Reproduction in Flowering Plants"},
+    ],
+    fullBookDownloadUrl: bookPdfUrls["biology_xii"]
   },
 ];
 
@@ -88,6 +111,7 @@ export default function NcertViewerPage() {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
   const [currentPdfUrl, setCurrentPdfUrl] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<boolean>(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const handleBookSelect = (bookId: string) => {
     const book = availableBooks.find(b => b.id === bookId);
@@ -109,11 +133,11 @@ export default function NcertViewerPage() {
         if (chapterLink) {
           setCurrentPdfUrl(chapterLink);
           setPdfError(false);
-          toast({ title: `Loading Chapter: ${chapter.name}`, description: "Attempting to display PDF. For annotation, please open externally." });
+          toast({ title: `Loading Chapter: ${chapter.name}`, description: "Attempting to display PDF. For annotation, please open externally or download." });
           logActivity("NCERT Viewer", `Viewing chapter PDF: ${chapter.name}`);
         } else {
           setCurrentPdfUrl(null);
-          setPdfError(false); // Reset error for mock content
+          setPdfError(false); 
           toast({ title: `Chapter: ${chapter.name}`, description: "Displaying mock content. PDF link not available in mock data." });
           logActivity("NCERT Viewer", `Viewed chapter (mock content): ${chapter.name} from ${selectedBook?.name}`);
         }
@@ -147,7 +171,7 @@ export default function NcertViewerPage() {
 
   const handleViewerAction = (action: string) => {
      if (currentPdfUrl || selectedChapter) { 
-        toast({ title: `Action: ${action}`, description: `For ${action.toLowerCase()} on "${selectedChapter?.name}", please use your PDF viewer's tools after opening the PDF externally.` });
+        toast({ title: `Action: ${action}`, description: `For ${action.toLowerCase()} on "${selectedChapter?.name}", please use your PDF viewer's tools after opening the PDF externally or downloading it.` });
         logActivity("NCERT Viewer", `Viewer action info: ${action} on chapter ${selectedChapter?.name}`);
     } else {
          toast({ title: "No Content Selected", description: "Please select a chapter first.", variant: "destructive" });
@@ -160,17 +184,17 @@ export default function NcertViewerPage() {
         <BookOpen className="h-8 w-8 text-primary" />
         <h1 className="text-3xl font-bold tracking-tight">NCERT Book Viewer</h1>
       </div>
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>Note on PDF Annotation</AlertTitle>
-        <AlertDescription>
-          This viewer allows you to view NCERT PDFs within the app. For features like highlighting, making notes, or editing, please download the PDF or open it externally using the <LinkIcon className="inline h-3 w-3 mx-0.5"/> button and use your preferred PDF editing software.
+      <Alert variant="default" className="bg-primary/10 border-primary/30">
+        <Info className="h-4 w-4 text-primary" />
+        <AlertTitle className="text-primary">Note on PDF Annotation & Download</AlertTitle>
+        <AlertDescription className="text-primary/80">
+          This viewer allows you to view NCERT PDFs within the app. For features like highlighting, making notes, editing, or offline access, please use the <Download className="inline h-3 w-3 mx-0.5"/> "Download Full Book" button or the <LinkIcon className="inline h-3 w-3 mx-0.5"/> "Open PDF in new tab" button for chapters, then use your preferred PDF editing software or save the file.
         </AlertDescription>
       </Alert>
       <Card className="flex-1 flex flex-col shadow-lg">
         <CardHeader>
           <CardTitle>Your Digital Textbooks</CardTitle>
-          <CardDescription>Access NCERT books. View chapters as PDFs or download them.</CardDescription>
+          <CardDescription>Access NCERT books. View chapters as PDFs (if embeddable) or download them.</CardDescription>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col md:flex-row gap-6 overflow-hidden">
           <Card className="w-full md:w-1/3 lg:w-1/4 flex flex-col bg-card/80">
@@ -190,7 +214,7 @@ export default function NcertViewerPage() {
               ))}
             </ScrollArea>
             <CardFooter className="p-4 border-t">
-              <Button variant="outline" className="w-full" onClick={handleDownloadBook} disabled={!selectedBook}>
+              <Button variant="outline" className="w-full" onClick={handleDownloadBook} disabled={!selectedBook || !selectedBook.fullBookDownloadUrl}>
                 <Download className="mr-2 h-4 w-4" /> Download Full Book
               </Button>
             </CardFooter>
@@ -203,7 +227,7 @@ export default function NcertViewerPage() {
               </h2>
               <div className="flex space-x-2">
                  {(currentPdfUrl || (selectedChapter && chapterPdfLinks[selectedChapter.id])) && (
-                  <Button variant="outline" size="icon" onClick={handleOpenChapterPdfExternally} title="Open PDF in new tab">
+                  <Button variant="outline" size="icon" onClick={handleOpenChapterPdfExternally} title="Open PDF in new tab for full features">
                     <LinkIcon className="h-5 w-5"/>
                   </Button>
                 )}
@@ -244,13 +268,19 @@ export default function NcertViewerPage() {
                 )}
                 {selectedChapter && currentPdfUrl && !pdfError && (
                     <iframe 
+                        ref={iframeRef}
                         src={currentPdfUrl} 
                         title={selectedChapter.name || "PDF Document"} 
                         className="w-full h-full border-0"
+                        // Sandbox can sometimes interfere with PDF viewers, test with and without if issues
+                        // sandbox="allow-scripts allow-same-origin allow-popups" 
                         onError={() => {
-                             toast({variant: "destructive", title: "PDF Load Error", description: "Could not embed PDF. This might be due to the PDF provider's restrictions. Try opening externally using the link icon above."});
+                             toast({variant: "destructive", title: "PDF Load Error", description: "Could not embed PDF. This might be due to the PDF provider's restrictions (e.g. X-Frame-Options). Try opening externally using the link icon above.", duration: 7000});
                              setPdfError(true); 
                              logActivity("NCERT Viewer Error", `Failed to embed PDF: ${selectedChapter.name}`);
+                        }}
+                        onLoad={() => {
+                            logActivity("NCERT Viewer", `Successfully loaded PDF in iframe: ${selectedChapter.name}`);
                         }}
                     />
                 )}
@@ -274,3 +304,5 @@ export default function NcertViewerPage() {
     </div>
   );
 }
+
+    

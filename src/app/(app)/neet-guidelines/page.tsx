@@ -1,13 +1,13 @@
 
 "use client";
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BookOpenCheck, PlusCircle, Edit2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label'; // Added import
+import { Label } from '@/components/ui/label';
 import {
   Dialog,
   DialogContent,
@@ -19,12 +19,16 @@ import {
   DialogClose
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
+import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
+import { logActivity } from '@/lib/activity-logger';
 
 interface GuidelineTab {
   id: string;
   title: string;
   content: string;
 }
+
+const NEET_GUIDELINES_TABS_KEY = 'neetPrepProGuidelineTabs';
 
 const initialTabs: GuidelineTab[] = [
   { id: "general_tips", title: "General Tips", content: "1. Create a realistic study schedule and stick to it.\n2. Focus on understanding concepts rather than rote memorization.\n3. Solve previous year question papers regularly." },
@@ -35,64 +39,81 @@ const initialTabs: GuidelineTab[] = [
 export default function NeetGuidelinesPage() {
   const { toast } = useToast();
   const [tabs, setTabs] = useState<GuidelineTab[]>(initialTabs);
-  const [activeTab, setActiveTab] = useState<string>(initialTabs[0]?.id || '');
+  const [activeTabId, setActiveTabId] = useState<string>(initialTabs[0]?.id || '');
   
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [currentTab, setCurrentTab] = useState<Partial<GuidelineTab> & { id?: string }>({});
-  const [tabTitle, setTabTitle] = useState('');
-  const [tabContent, setTabContent] = useState('');
+  const [currentEditingTab, setCurrentEditingTab] = useState<Partial<GuidelineTab> & { id?: string }>({});
+  const [tabTitleInput, setTabTitleInput] = useState('');
+  const [tabContentInput, setTabContentInput] = useState('');
+
+  useEffect(() => {
+    const loadedTabs = loadFromLocalStorage<GuidelineTab[]>(NEET_GUIDELINES_TABS_KEY, initialTabs);
+    setTabs(loadedTabs);
+    if (loadedTabs.length > 0 && !loadedTabs.find(t => t.id === activeTabId)) {
+      setActiveTabId(loadedTabs[0].id);
+    } else if (loadedTabs.length === 0) {
+      setActiveTabId('');
+    }
+  }, []);
+
+  useEffect(() => {
+    saveToLocalStorage(NEET_GUIDELINES_TABS_KEY, tabs);
+  }, [tabs]);
+
 
   const handleOpenDialog = (tab?: GuidelineTab) => {
     if (tab) {
-      setCurrentTab(tab);
-      setTabTitle(tab.title);
-      setTabContent(tab.content);
+      setCurrentEditingTab(tab);
+      setTabTitleInput(tab.title);
+      setTabContentInput(tab.content);
     } else {
-      setCurrentTab({});
-      setTabTitle('');
-      setTabContent('');
+      setCurrentEditingTab({});
+      setTabTitleInput('');
+      setTabContentInput('');
     }
     setIsFormOpen(true);
   };
 
   const handleSaveTab = () => {
-    if (!tabTitle || !tabContent) {
+    if (!tabTitleInput || !tabContentInput) {
       toast({ variant: "destructive", title: "Missing Information", description: "Please provide a title and content for the tab." });
       return;
     }
 
-    if (currentTab.id) { // Editing
-      setTabs(tabs.map(t => t.id === currentTab.id ? { ...t, title: tabTitle, content: tabContent } : t));
-      toast({ title: "Tab Updated", description: `"${tabTitle}" has been updated.` });
+    if (currentEditingTab.id) { // Editing
+      setTabs(tabs.map(t => t.id === currentEditingTab.id ? { ...t, title: tabTitleInput, content: tabContentInput } : t));
+      toast({ title: "Tab Updated", description: `"${tabTitleInput}" has been updated.` });
+      logActivity("NEET Guidelines", `Tab updated: "${tabTitleInput}"`);
     } else { // Adding
-      const newTabId = tabTitle.toLowerCase().replace(/\s+/g, '_') + '_' + crypto.randomUUID().substring(0,4);
+      const newTabId = tabTitleInput.toLowerCase().replace(/\s+/g, '_') + '_' + crypto.randomUUID().substring(0,4);
       const newTab: GuidelineTab = {
         id: newTabId,
-        title: tabTitle,
-        content: tabContent,
+        title: tabTitleInput,
+        content: tabContentInput,
       };
       setTabs(prevTabs => [...prevTabs, newTab]);
-      setActiveTab(newTabId); // Switch to the new tab
-      toast({ title: "Tab Added", description: `New tab "${tabTitle}" created.` });
+      setActiveTabId(newTabId); 
+      toast({ title: "Tab Added", description: `New tab "${tabTitleInput}" created.` });
+      logActivity("NEET Guidelines", `Tab added: "${tabTitleInput}"`);
     }
     setIsFormOpen(false);
   };
   
-  const handleDeleteTab = (tabId: string) => {
+  const handleDeleteTab = (tabIdToDelete: string) => {
     if (tabs.length <= 1) {
       toast({ variant: "destructive", title: "Cannot Delete", description: "At least one tab must remain." });
       return;
     }
-    const tabToDelete = tabs.find(t => t.id === tabId);
-    setTabs(tabs.filter(t => t.id !== tabId));
-    // If active tab is deleted, switch to the first available tab
-    if (activeTab === tabId) {
-      setActiveTab(tabs.filter(t => t.id !== tabId)[0]?.id || '');
+    const tabToDelete = tabs.find(t => t.id === tabIdToDelete);
+    setTabs(tabs.filter(t => t.id !== tabIdToDelete));
+    
+    if (activeTabId === tabIdToDelete) {
+      setActiveTabId(tabs.filter(t => t.id !== tabIdToDelete)[0]?.id || '');
     }
     if (tabToDelete) {
       toast({ variant: "destructive", title: "Tab Deleted", description: `"${tabToDelete.title}" has been removed.` });
+      logActivity("NEET Guidelines", `Tab deleted: "${tabToDelete.title}"`);
     }
-    
   };
 
 
@@ -112,19 +133,19 @@ export default function NeetGuidelinesPage() {
           </DialogTrigger>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>{currentTab.id ? "Edit Tab" : "Add New Tab"}</DialogTitle>
+              <DialogTitle>{currentEditingTab.id ? "Edit Tab" : "Add New Tab"}</DialogTitle>
               <DialogDescription>
-                {currentTab.id ? "Modify the content of this guideline tab." : "Create a new tab for your tips or notes."}
+                {currentEditingTab.id ? "Modify the content of this guideline tab." : "Create a new tab for your tips or notes."}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div>
-                <Label htmlFor="tab-title">Tab Title</Label>
-                <Input id="tab-title" value={tabTitle} onChange={(e) => setTabTitle(e.target.value)} placeholder="e.g., Physics Formulas" />
+                <Label htmlFor="tab-title-input">Tab Title</Label>
+                <Input id="tab-title-input" value={tabTitleInput} onChange={(e) => setTabTitleInput(e.target.value)} placeholder="e.g., Physics Formulas" />
               </div>
               <div>
-                <Label htmlFor="tab-content">Content</Label>
-                <Textarea id="tab-content" value={tabContent} onChange={(e) => setTabContent(e.target.value)} placeholder="Enter your notes or tips here..." className="min-h-[150px]" />
+                <Label htmlFor="tab-content-input">Content</Label>
+                <Textarea id="tab-content-input" value={tabContentInput} onChange={(e) => setTabContentInput(e.target.value)} placeholder="Enter your notes or tips here..." className="min-h-[150px]" />
               </div>
             </div>
             <DialogFooter>
@@ -137,33 +158,31 @@ export default function NeetGuidelinesPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Important NEET Info</CardTitle>
-          <CardDescription>Organize and access important NEET tips, reminders, or guidelines in custom tabs.</CardDescription>
+          <CardDescription>Organize and access important NEET tips, reminders, or guidelines in custom tabs. Your notes here are saved locally.</CardDescription>
         </CardHeader>
         <CardContent>
           {tabs.length > 0 ? (
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <Tabs value={activeTabId} onValueChange={setActiveTabId} className="w-full">
               <TabsList className="grid w-full grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1 mb-4 h-auto flex-wrap">
                 {tabs.map(tab => (
                   <TabsTrigger key={tab.id} value={tab.id} className="relative group data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                     {tab.title}
-                    {tab.id === activeTab && ( // Show edit/delete only on active tab for simplicity
-                      <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity absolute right-1 top-1/2 -translate-y-1/2 flex">
-                        <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-primary/30" onClick={(e) => { e.stopPropagation(); handleOpenDialog(tab); }}>
-                          <Edit2 className="h-3 w-3" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/20 hover:text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteTab(tab.id); }}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    )}
                   </TabsTrigger>
                 ))}
               </TabsList>
               {tabs.map(tab => (
                 <TabsContent key={tab.id} value={tab.id}>
                   <Card className="bg-card/80 shadow-inner">
-                    <CardHeader>
+                    <CardHeader className="flex flex-row justify-between items-center">
                       <CardTitle className="text-xl">{tab.title}</CardTitle>
+                      <div className="flex space-x-1">
+                        <Button variant="outline" size="sm" onClick={() => handleOpenDialog(tab)}>
+                          <Edit2 className="mr-1.5 h-3.5 w-3.5"/> Edit
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteTab(tab.id)} disabled={tabs.length <=1}>
+                          <Trash2 className="mr-1.5 h-3.5 w-3.5"/> Delete
+                        </Button>
+                      </div>
                     </CardHeader>
                     <CardContent className="space-y-2 min-h-[200px] whitespace-pre-wrap text-sm leading-relaxed">
                       {tab.content || <p className="text-muted-foreground">No content yet for this tab. Click edit to add some!</p>}
@@ -182,3 +201,5 @@ export default function NeetGuidelinesPage() {
     </div>
   );
 }
+
+    

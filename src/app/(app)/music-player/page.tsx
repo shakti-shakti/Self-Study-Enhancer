@@ -2,130 +2,102 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
-import { Music2, Play, Pause, SkipForward, SkipBack, ListMusic, Volume2, VolumeX } from "lucide-react";
+import { Music2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
-import { Slider } from "@/components/ui/slider"; // Assuming you have a Slider component
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+
+const DEFAULT_SPOTIFY_EMBED_URL = "https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M"; // A generic Lo-fi Beats playlist
 
 export default function MusicPlayerPage() {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [volume, setVolume] = useState(50);
-  const [isMuted, setIsMuted] = useState(false);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const trackDuration = 180; // Example duration in seconds (3 minutes)
+  const [spotifyEmbedUrl, setSpotifyEmbedUrl] = useState(DEFAULT_SPOTIFY_EMBED_URL);
+  const [inputUrl, setInputUrl] = useState(DEFAULT_SPOTIFY_EMBED_URL);
+  const { toast } = useToast();
 
-  useEffect(() => {
-    if (isPlaying) {
-      intervalRef.current = setInterval(() => {
-        setProgress(prev => {
-          if (prev >= 100) {
-            clearInterval(intervalRef.current!);
-            setIsPlaying(false);
-            return 100;
-          }
-          return prev + (100 / trackDuration); // Increment progress based on duration
-        });
-      }, 1000);
+  const handleChangeEmbedUrl = () => {
+    if (inputUrl.startsWith("https://open.spotify.com/embed/")) {
+      setSpotifyEmbedUrl(inputUrl);
+      toast({title: "Spotify Embed Updated", description: "Player will now load the new Spotify content."});
     } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-    }
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-    };
-  }, [isPlaying, trackDuration]);
-
-  const togglePlayPause = () => {
-    setIsPlaying(!isPlaying);
-    if (!isPlaying && progress >= 100) { // If starting after finishing
-      setProgress(0);
+      toast({variant: "destructive", title: "Invalid URL", description: "Please provide a valid Spotify embed URL (starts with https://open.spotify.com/embed/)."});
     }
   };
-
-  const handleSeek = (newProgress: number[]) => {
-    setProgress(newProgress[0]);
-  };
-  
-  const handleVolumeChange = (newVolume: number[]) => {
-    setVolume(newVolume[0]);
-    setIsMuted(false); // Unmute if volume is changed
-  };
-
-  const toggleMute = () => {
-    setIsMuted(!isMuted);
-  }
-
-  const formatTime = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  const currentTime = (progress / 100) * trackDuration;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center space-x-3">
         <Music2 className="h-8 w-8 text-primary" />
-        <h1 className="text-3xl font-bold tracking-tight">Music Player</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Music Player (Spotify Embed)</h1>
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>Study Session Beats</CardTitle>
-          <CardDescription>Enjoy some focus-enhancing tunes. (Local playback simulation)</CardDescription>
+          <CardTitle>Focus with Spotify</CardTitle>
+          <CardDescription>
+            Embed your favorite Spotify playlists or albums to listen while you study. 
+            Get the embed code from Spotify (Share &gt; Embed track/playlist &gt; copy the src URL).
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col items-center space-y-6">
-          <div className="w-64 h-64 bg-muted rounded-lg flex items-center justify-center shadow-lg">
-            <Image src="https://placehold.co/256x256.png" alt="Album Art" data-ai-hint="music album abstract" width={256} height={256} className="rounded-lg object-cover" />
-          </div>
-          <div>
-            <h3 className="text-xl font-semibold text-center">Focus Flow Lo-fi</h3>
-            <p className="text-sm text-muted-foreground text-center">Study Beats Channel</p>
-          </div>
-          <div className="w-full max-w-md space-y-2">
-            <Slider
-              defaultValue={[progress]}
-              value={[progress]}
-              max={100}
-              step={1}
-              onValueChange={handleSeek}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(trackDuration)}</span>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="spotify-url-input">Spotify Embed URL</Label>
+            <div className="flex space-x-2">
+              <Input 
+                id="spotify-url-input"
+                type="text" 
+                value={inputUrl}
+                onChange={(e) => setInputUrl(e.target.value)}
+                placeholder="Paste Spotify Embed URL here" 
+              />
+              <Button onClick={handleChangeEmbedUrl}>Load</Button>
             </div>
+             <p className="text-xs text-muted-foreground">Example: https://open.spotify.com/embed/playlist/your_playlist_id</p>
           </div>
-          <div className="flex items-center space-x-4">
-            <Button variant="ghost" size="icon" onClick={() => setProgress(0)}><SkipBack className="h-6 w-6" /></Button>
-            <Button variant="default" size="lg" className="rounded-full w-16 h-16 shadow-md" onClick={togglePlayPause}>
-              {isPlaying ? <Pause className="h-8 w-8" /> : <Play className="h-8 w-8" />}
+          
+          <div className="aspect-video w-full max-w-2xl mx-auto border rounded-lg overflow-hidden shadow-lg">
+            {spotifyEmbedUrl ? (
+              <iframe
+                title="Spotify Embed Player"
+                src={spotifyEmbedUrl}
+                width="100%"
+                height="100%"
+                allowFullScreen={false} // Spotify embed usually sets its own height
+                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                loading="lazy"
+                className="border-0"
+              ></iframe>
+            ) : (
+              <div className="w-full h-full bg-muted flex items-center justify-center">
+                <p className="text-muted-foreground">Enter a Spotify Embed URL above to load music.</p>
+              </div>
+            )}
+          </div>
+          <div className="text-center">
+            <Button variant="outline" asChild>
+              <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="mr-2 h-4 w-4" /> Open Spotify in New Tab
+              </a>
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setProgress(100)}><SkipForward className="h-6 w-6" /></Button>
           </div>
-           <div className="flex items-center space-x-2 w-full max-w-xs">
-            <Button variant="ghost" size="icon" onClick={toggleMute}>
-              {isMuted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-            </Button>
-            <Slider
-              defaultValue={[volume]}
-              value={[isMuted ? 0 : volume]}
-              max={100}
-              step={1}
-              onValueChange={handleVolumeChange}
-              className="w-full"
-            />
-          </div>
-          <Button variant="outline">
-            <ListMusic className="mr-2 h-4 w-4" />
-            View Playlist
-          </Button>
+        </CardContent>
+      </Card>
+       <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>How to get a Spotify Embed URL:</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm space-y-2">
+          <p>1. Go to Spotify (web or desktop app).</p>
+          <p>2. Find the song, album, or playlist you want to embed.</p>
+          <p>3. Click the three dots (...) menu next to it.</p>
+          <p>4. Go to "Share" &gt; "Embed track/playlist".</p>
+          <p>5. In the embed code preview, find the `src="..."` attribute inside the `&lt;iframe&gt;` tag.</p>
+          <p>6. Copy ONLY the URL from the `src` attribute (it will start with `https://open.spotify.com/embed/...`).</p>
+          <p>7. Paste that URL into the input field above.</p>
         </CardContent>
       </Card>
     </div>
   );
 }
+
+    
