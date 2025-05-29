@@ -7,6 +7,7 @@ import { BookOpenCheck, PlusCircle, Edit2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label'; // Added import
 import {
   Dialog,
   DialogContent,
@@ -82,12 +83,16 @@ export default function NeetGuidelinesPage() {
       toast({ variant: "destructive", title: "Cannot Delete", description: "At least one tab must remain." });
       return;
     }
+    const tabToDelete = tabs.find(t => t.id === tabId);
     setTabs(tabs.filter(t => t.id !== tabId));
     // If active tab is deleted, switch to the first available tab
     if (activeTab === tabId) {
       setActiveTab(tabs.filter(t => t.id !== tabId)[0]?.id || '');
     }
-    toast({ variant: "destructive", title: "Tab Deleted" });
+    if (tabToDelete) {
+      toast({ variant: "destructive", title: "Tab Deleted", description: `"${tabToDelete.title}" has been removed.` });
+    }
+    
   };
 
 
