@@ -23,7 +23,7 @@ export const navItems: NavItem[] = [
   { title: "Month Planner", href: "/month-planner", icon: Calendar },
   { title: "Year Planner", href: "/year-planner", icon: CalendarCheck },
   { title: "NEET Guidelines", href: "/neet-guidelines", icon: BookOpenCheck },
-  { title: "Music Player", href: "/music-player", icon: Music2, disabled: true }, // Example of disabled
+  { title: "Music Player", href: "/music-player", icon: Music2 }, // Enabled
   { title: "NCERT Viewer", href: "/ncert-viewer", icon: BookOpen },
   { title: "Web Browser", href: "/browser", icon: Globe },
   { title: "Activity History", href: "/activity-history", icon: History },
@@ -32,5 +32,6 @@ export const navItems: NavItem[] = [
   { title: "Dictionary", href: "/dictionary", icon: SpellCheck },
   { title: "Translator", href: "/translate", icon: Languages },
   { title: "Calculator", href: "/calculator", icon: CalculatorIcon },
-  { title: "Profile Settings", href: "/profile", icon: Settings }, // Using Settings icon for Profile
+  { title: "Profile Settings", href: "/profile", icon: Settings },
 ];
+
