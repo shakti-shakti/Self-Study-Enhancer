@@ -1,4 +1,3 @@
-
 "use client";
 
 import type { ReactNode } from 'react';
@@ -102,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
     });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
+    const { data, error } = supabase.auth.onAuthStateChange(
       async (event: AuthChangeEvent, session: Session | null) => {
         setIsLoading(true);
         const currentSupabaseUser = session?.user ?? null;
@@ -130,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     return () => {
-      authListener?.unsubscribe();
+      data?.subscription?.unsubscribe();
     };
   }, [fetchUserProfile]);
 
@@ -323,4 +322,3 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     </AuthContext.Provider>
   );
 }
-

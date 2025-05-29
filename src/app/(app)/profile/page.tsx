@@ -223,8 +223,8 @@ export default function ProfileSettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div> <Label htmlFor="name">Full Name</Label> <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your Name" /> </div>
             <div> <Label htmlFor="email">Email Address</Label> <Input id="email" type="email" value={email} readOnly disabled placeholder="your@email.com" /> </div>
-            <div> <Label htmlFor="class-select">Class</Label> <Select value={selectedClass} onValueChange={setSelectedClass}> <SelectTrigger id="class-select"> <SelectValue placeholder="Select Your Class" /> </SelectTrigger> <SelectContent> <SelectItem value="11">Class 11</SelectItem> <SelectItem value="12">Class 12</SelectItem> <SelectItem value="dropper">Dropper</SelectItem> <SelectItem value="">None</SelectItem></SelectContent> </Select> </div>
-            <div> <Label htmlFor="target-year">Target NEET Year</Label> <Select value={targetYear} onValueChange={setTargetYear}> <SelectTrigger id="target-year"> <SelectValue placeholder="Select Target Year" /> </SelectTrigger> <SelectContent> {[new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2, new Date().getFullYear() + 3].map(year => ( <SelectItem key={year} value={String(year)}>{String(year)}</SelectItem> ))} <SelectItem value="">None</SelectItem></SelectContent> </Select> </div>
+            <div> <Label htmlFor="class-select">Class</Label> <Select value={selectedClass} onValueChange={setSelectedClass}> <SelectTrigger id="class-select"> <SelectValue placeholder="Select Your Class" /> </SelectTrigger> <SelectContent> <SelectItem value="11">Class 11</SelectItem> <SelectItem value="12">Class 12</SelectItem> <SelectItem value="dropper">Dropper</SelectItem> <SelectItem value="none">None</SelectItem></SelectContent> </Select> </div>
+            <div> <Label htmlFor="target-year">Target NEET Year</Label> <Select value={targetYear} onValueChange={setTargetYear}> <SelectTrigger id="target-year"> <SelectValue placeholder="Select Target Year" /> </SelectTrigger> <SelectContent> {[new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2, new Date().getFullYear() + 3].map(year => ( <SelectItem key={year} value={String(year)}>{String(year)}</SelectItem> ))} <SelectItem value="none">None</SelectItem></SelectContent> </Select> </div>
           </div>
         </CardContent>
       </Card>
@@ -253,7 +253,7 @@ export default function ProfileSettingsPage() {
       <Card className="shadow-lg">
         <CardHeader><CardTitle>Security</CardTitle></CardHeader>
         <CardContent>
-          <form onSubmit={handleChangePassword} className="space-y-4">
+          <div className="space-y-4"> {/* Use a div instead of a nested form */}
             <h3 className="text-lg font-medium flex items-center"><KeyRound className="mr-2 h-5 w-5 text-muted-foreground"/>Change Password</h3>
             {/* Supabase doesn't require current password for client-side update if user is authenticated */}
             {/* <div className="grid gap-2">
@@ -264,8 +264,8 @@ export default function ProfileSettingsPage() {
               <div> <Label htmlFor="new-password">New Password</Label> <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password" /> </div>
               <div> <Label htmlFor="confirm-new-password">Confirm New Password</Label> <Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="Confirm new password" /> </div>
             </div>
-            <Button type="submit" variant="outline" disabled={isPasswordSaving}> {isPasswordSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <KeyRound className="mr-2 h-4 w-4"/>} Change Password </Button>
-          </form>
+            <Button type="button" variant="outline" onClick={handleChangePassword} disabled={isPasswordSaving}> {isPasswordSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <KeyRound className="mr-2 h-4 w-4"/>} Change Password </Button>
+          </div>
         </CardContent>
       </Card>
       

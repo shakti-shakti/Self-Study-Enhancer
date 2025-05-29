@@ -1,5 +1,5 @@
-
 "use client";
+import { Label } from "@/components/ui/label";
 import { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { History, ListFilter, Trash2, Search } from "lucide-react";
