@@ -2,7 +2,10 @@
 "use client";
 
 import { useContext } from 'react';
-import { AuthContext } from '@/contexts/auth-provider';
+import { AuthContext, type AppUser } from '@/contexts/auth-provider'; // Import AppUser
+import type { User as FirebaseUser } from 'firebase/auth'; // Import FirebaseUser for clarity
+
+export type { AppUser, FirebaseUser }; // Export types
 
 export function useAuth() {
   const context = useContext(AuthContext);
