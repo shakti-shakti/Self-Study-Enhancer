@@ -2,11 +2,13 @@
 "use client";
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
-import { ClipboardList, PlusCircle, Edit2, Trash2 } from "lucide-react";
+import { ClipboardList, PlusCircle, Edit2, Trash2, AlarmClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
@@ -25,8 +27,11 @@ import { logActivity } from '@/lib/activity-logger';
 interface CustomTask {
   id: string;
   title: string;
+  description?: string;
   completed: boolean;
   category: string;
+  reminderTime?: string;
+  hasReminder?: boolean;
 }
 
 const CUSTOM_TASKS_KEY = 'neetPrepProCustomTasks';
@@ -37,8 +42,13 @@ export default function CustomTasksPage() {
   const [customTasks, setCustomTasks] = useState<CustomTask[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Partial<CustomTask> & { id?: string }>({});
+  
   const [taskTitle, setTaskTitle] = useState('');
+  const [taskDescription, setTaskDescription] = useState('');
   const [taskCategory, setTaskCategory] = useState(taskCategories[0]);
+  const [taskHasReminder, setTaskHasReminder] = useState(false);
+  const [taskReminderTime, setTaskReminderTime] = useState('');
+
 
   useEffect(() => {
     setCustomTasks(loadFromLocalStorage<CustomTask[]>(CUSTOM_TASKS_KEY, []));
@@ -53,11 +63,17 @@ export default function CustomTasksPage() {
     if (task) {
       setCurrentTask(task);
       setTaskTitle(task.title);
+      setTaskDescription(task.description || '');
       setTaskCategory(task.category);
+      setTaskHasReminder(task.hasReminder || false);
+      setTaskReminderTime(task.reminderTime || '');
     } else {
       setCurrentTask({});
       setTaskTitle('');
+      setTaskDescription('');
       setTaskCategory(taskCategories[0]);
+      setTaskHasReminder(false);
+      setTaskReminderTime('09:00');
     }
     setIsFormOpen(true);
   };
@@ -67,16 +83,27 @@ export default function CustomTasksPage() {
       toast({ variant: "destructive", title: "Missing Information", description: "Please provide a title and category." });
       return;
     }
+    if (taskHasReminder && !taskReminderTime) {
+      toast({ variant: "destructive", title: "Missing Reminder Time", description: "Please provide a time for the reminder." });
+      return;
+    }
+
+    const taskData: Omit<CustomTask, 'id' | 'completed'> = {
+        title: taskTitle,
+        description: taskDescription,
+        category: taskCategory,
+        hasReminder: taskHasReminder,
+        reminderTime: taskHasReminder ? taskReminderTime : undefined,
+    };
 
     if (currentTask.id) { // Editing existing task
-      setCustomTasks(customTasks.map(t => t.id === currentTask.id ? { ...t, title: taskTitle, category: taskCategory } : t));
+      setCustomTasks(customTasks.map(t => t.id === currentTask.id ? { ...t, ...taskData } : t));
       toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
       logActivity("Custom Tasks", `Task updated: "${taskTitle}"`);
     } else { // Adding new task
       const newTask: CustomTask = {
         id: crypto.randomUUID(),
-        title: taskTitle,
-        category: taskCategory,
+        ...taskData,
         completed: false,
       };
       setCustomTasks(prevTasks => [newTask, ...prevTasks]);
@@ -125,7 +152,7 @@ export default function CustomTasksPage() {
               Create New Task
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-[425px]">
+          <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>{currentTask.id ? "Edit Custom Task" : "Add New Custom Task"}</DialogTitle>
               <DialogDescription>
@@ -133,14 +160,18 @@ export default function CustomTasksPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="custom-task-title" className="text-right">Title</Label>
-                <Input id="custom-task-title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} className="col-span-3" placeholder="e.g., Grocery Shopping" />
+              <div>
+                <Label htmlFor="custom-task-title">Title</Label>
+                <Input id="custom-task-title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="e.g., Grocery Shopping" />
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="custom-task-category" className="text-right">Category</Label>
+              <div>
+                <Label htmlFor="custom-task-description">Description (Optional)</Label>
+                <Textarea id="custom-task-description" value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} placeholder="Add more details..." />
+              </div>
+              <div>
+                <Label htmlFor="custom-task-category">Category</Label>
                 <Select value={taskCategory} onValueChange={setTaskCategory}>
-                  <SelectTrigger id="custom-task-category" className="col-span-3">
+                  <SelectTrigger id="custom-task-category">
                     <SelectValue placeholder="Select Category" />
                   </SelectTrigger>
                   <SelectContent>
@@ -150,6 +181,16 @@ export default function CustomTasksPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="flex items-center space-x-2 pt-2">
+                <Switch id="custom-task-reminder-enabled" checked={taskHasReminder} onCheckedChange={setTaskHasReminder}/>
+                <Label htmlFor="custom-task-reminder-enabled">Set Reminder (Optional)</Label>
+              </div>
+              {taskHasReminder && (
+                <div>
+                  <Label htmlFor="custom-task-reminder-time">Reminder Time</Label>
+                  <Input id="custom-task-reminder-time" type="time" value={taskReminderTime} onChange={(e) => setTaskReminderTime(e.target.value)} />
+                </div>
+              )}
             </div>
             <DialogFooter>
               <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
@@ -168,16 +209,22 @@ export default function CustomTasksPage() {
             <ul className="space-y-3">
               {customTasks.map(task => (
                 <li key={task.id} className="flex items-center justify-between p-3 border rounded-lg hover:shadow-sm transition-shadow bg-card/80">
-                  <div className="flex items-center space-x-3">
-                    <Checkbox id={`custom-task-${task.id}`} checked={task.completed} onCheckedChange={() => toggleTaskCompletion(task.id)}/>
-                    <div>
+                  <div className="flex items-start space-x-3">
+                    <Checkbox id={`custom-task-${task.id}`} checked={task.completed} onCheckedChange={() => toggleTaskCompletion(task.id)} className="mt-1"/>
+                    <div className="flex-1">
                       <Label htmlFor={`custom-task-${task.id}`} className={`font-medium ${task.completed ? 'line-through text-muted-foreground' : ''}`}>
                         {task.title}
                       </Label>
                       <p className="text-xs text-muted-foreground">{task.category}</p>
+                      {task.description && <p className="text-sm mt-1 text-muted-foreground/80 whitespace-pre-wrap">{task.description}</p>}
+                      {task.hasReminder && task.reminderTime && (
+                        <div className="flex items-center text-xs text-accent mt-1">
+                          <AlarmClock className="h-3.5 w-3.5 mr-1" /> {task.reminderTime} (Reminder set)
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <div className="space-x-1">
+                  <div className="space-x-1 flex-shrink-0">
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenDialog(task)}><Edit2 className="h-4 w-4"/></Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDeleteTask(task.id)}><Trash2 className="h-4 w-4"/></Button>
                   </div>

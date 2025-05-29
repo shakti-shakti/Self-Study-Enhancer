@@ -4,23 +4,35 @@ import { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { History, ListFilter, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getActivityLog, type ActivityLog, logActivity } from "@/lib/activity-logger"; // Assuming logActivity is also exported for potential manual logging elsewhere, or for clearing.
+import { getActivityLog, type ActivityLog, logActivity } from "@/lib/activity-logger"; 
 import { formatDistanceToNow } from 'date-fns';
 import { saveToLocalStorage } from "@/lib/local-storage";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
 
 export default function ActivityHistoryPage() {
   const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const { toast } = useToast();
 
   useEffect(() => {
     setActivities(getActivityLog());
   }, []);
   
   const handleClearHistory = () => {
-    // Clear activities in localStorage
     saveToLocalStorage('neetPrepProActivityLog', []);
-    // Update state to reflect the change
     setActivities([]); 
-     logActivity("System", "Activity history cleared."); // Log this action itself
+    logActivity("System", "Activity history cleared."); 
+    toast({ title: "History Cleared", description: "Your activity log has been cleared." });
   };
 
   return (
@@ -35,10 +47,28 @@ export default function ActivityHistoryPage() {
             <ListFilter className="mr-2 h-4 w-4" />
             Filter Activities
           </Button>
-          <Button variant="destructive" onClick={handleClearHistory} disabled={activities.length === 0}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Clear History
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" disabled={activities.length === 0}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                Clear History
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This action will permanently delete all your activity history. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleClearHistory} className="bg-destructive hover:bg-destructive/90">
+                  Clear History
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
       <Card className="shadow-lg">
@@ -55,7 +85,9 @@ export default function ActivityHistoryPage() {
                     <div>
                       <p className="font-semibold">{activity.type}</p>
                       <p className="text-sm text-muted-foreground">{activity.description}</p>
-                      {activity.details?.score && <p className="text-xs text-accent">Score: {activity.details.score}</p>}
+                      {activity.details?.score !== undefined && activity.details?.total !== undefined && (
+                        <p className="text-xs text-accent">Score: {activity.details.score}/{activity.details.total}</p>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground" title={new Date(activity.timestamp).toLocaleString()}>
                         {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}

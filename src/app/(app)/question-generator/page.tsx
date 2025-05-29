@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { FileQuestion, Settings2, History, BarChart3, Save, Copy, HelpCircle, Loader2, ListChecks, BookOpen, ChevronRight, ChevronLeft, PlayCircle, RotateCcw, CheckCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,57 +25,61 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Progress } from '@/components/ui/progress'; // Added Progress component
+import { Progress } from '@/components/ui/progress';
 
-const SAVED_QUESTIONS_KEY = 'neetPrepProSavedQuestionsMCQ'; // Changed key for new format
+const SAVED_QUESTIONS_KEY = 'neetPrepProSavedQuestionsMCQ';
+const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
 
 interface QuestionWithAnswer extends GenerateRandomQuestionOutput {
-  id: string; // Unique ID for this instance of the question in a quiz
-  userAnswerIndex?: number; // Index of the user's chosen answer
+  id: string;
+  userAnswerIndex?: number;
   isCorrect?: boolean;
 }
 
 interface SavedQuizQuestion extends GenerateRandomQuestionOutput {
-  id: string; // Original generated question ID
+  id: string;
   savedAt: string;
+}
+
+interface LastQuizScore {
+  score: number;
+  totalQuestions: number;
+  accuracy: number;
+  timestamp: string;
 }
 
 export default function QuestionGeneratorPage() {
   const { toast } = useToast();
 
-  // Configuration state
   const [selectedClass, setSelectedClass] = useState('11');
   const [subject, setSubject] = useState('physics');
   const [topic, setTopic] = useState('');
   const [source, setSource] = useState('ncert');
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard' | 'any'>('any');
-  const [numberOfQuestions, setNumberOfQuestions] = useState(5); // Default to 5 questions for quicker testing
+  const [numberOfQuestions, setNumberOfQuestions] = useState(5);
 
-  // Quiz flow state
   const [quizState, setQuizState] = useState<'configuring' | 'inProgress' | 'completed'>('configuring');
   const [currentQuestionSet, setCurrentQuestionSet] = useState<QuestionWithAnswer[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState<string | undefined>(undefined); // Store value of radio item (index as string)
+  const [selectedAnswer, setSelectedAnswer] = useState<string | undefined>(undefined);
   
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
   const [overallError, setOverallError] = useState<string | null>(null);
 
-  // Results state
   const [score, setScore] = useState(0);
+  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null);
 
-  // Saved questions (individual, not quiz results)
   const [savedIndividualQuestions, setSavedIndividualQuestions] = useState<SavedQuizQuestion[]>([]);
   const [isSavedQuestionsDialogOpen, setIsSavedQuestionsDialogOpen] = useState(false);
   
-  // Explanation Dialog
   const [isExplanationDialogOpen, setIsExplanationDialogOpen] = useState(false);
   const [detailedExplanation, setDetailedExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
   const [questionToExplain, setQuestionToExplain] = useState<string | null>(null);
 
-
   useEffect(() => {
     setSavedIndividualQuestions(loadFromLocalStorage<SavedQuizQuestion[]>(SAVED_QUESTIONS_KEY, []));
+    setLastQuizScore(loadFromLocalStorage<LastQuizScore | null>(LAST_QUIZ_SCORE_KEY, null));
   }, []);
 
   useEffect(() => {
@@ -83,9 +87,9 @@ export default function QuestionGeneratorPage() {
   }, [savedIndividualQuestions]);
 
   const topicsBySubject: Record<string, string[]> = {
-    physics: ["Kinematics", "Laws of Motion", "Work, Energy and Power", "Rotational Motion", "Gravitation", "Properties of Solids and Liquids", "Thermodynamics", "Oscillations and Waves", "Optics", "Electrostatics", "Current Electricity", "Magnetic Effects of Current", "Electromagnetic Induction", "Alternating Currents", "Electromagnetic Waves", "Dual Nature of Matter", "Atoms and Nuclei", "Semiconductor Electronics"],
-    chemistry: ["Some Basic Concepts of Chemistry", "Structure of Atom", "Classification of Elements", "Chemical Bonding", "States of Matter", "Thermodynamics", "Equilibrium", "Redox Reactions", "Hydrogen", "s-Block Elements", "p-Block Elements (Group 13-14)", "Organic Chemistry - Basic Principles", "Hydrocarbons", "Environmental Chemistry", "Solid State", "Solutions", "Electrochemistry", "Chemical Kinetics", "Surface Chemistry", "General Principles of Isolation of Elements", "p-Block Elements (Group 15-18)", "d-and f-Block Elements", "Coordination Compounds", "Haloalkanes and Haloarenes", "Alcohols, Phenols and Ethers", "Aldehydes, Ketones and Carboxylic Acids", "Amines", "Biomolecules", "Polymers", "Chemistry in Everyday Life"],
-    biology: ["The Living World", "Biological Classification", "Plant Kingdom", "Animal Kingdom", "Morphology of Flowering Plants", "Anatomy of Flowering Plants", "Structural Organisation in Animals", "Cell: The Unit of Life", "Biomolecules", "Cell Cycle and Cell Division", "Transport in Plants", "Mineral Nutrition", "Photosynthesis", "Respiration in Plants", "Plant Growth and Development", "Digestion and Absorption", "Breathing and Exchange of Gases", "Body Fluids and Circulation", "Excretory Products and their Elimination", "Locomotion and Movement", "Neural Control and Coordination", "Chemical Coordination and Integration", "Reproduction in Organisms", "Sexual Reproduction in Flowering Plants", "Human Reproduction", "Reproductive Health", "Principles of Inheritance and Variation", "Molecular Basis of Inheritance", "Evolution", "Human Health and Disease", "Strategies for Enhancement in Food Production", "Microbes in Human Welfare", "Biotechnology: Principles and Processes", "Biotechnology and its Applications", "Organisms and Populations", "Ecosystem", "Biodiversity and Conservation", "Environmental Issues"],
+    physics: ["Kinematics", "Laws of Motion", "Work, Energy & Power", "Rotational Motion", "Gravitation", "Properties of Solids & Liquids", "Thermodynamics", "Oscillations & Waves", "Optics", "Electrostatics", "Current Electricity", "Magnetic Effects of Current", "EMI & AC", "EM Waves", "Dual Nature of Matter", "Atoms & Nuclei", "Semiconductors"],
+    chemistry: ["Basic Concepts", "Structure of Atom", "Classification of Elements", "Chemical Bonding", "States of Matter", "Thermodynamics", "Equilibrium", "Redox Reactions", "Hydrogen", "s-Block", "p-Block (Gr 13-14)", "Organic - Basic Principles", "Hydrocarbons", "Environmental Chemistry", "Solid State", "Solutions", "Electrochemistry", "Chemical Kinetics", "Surface Chemistry", "Metallurgy", "p-Block (Gr 15-18)", "d & f-Block", "Coordination Compounds", "Haloalkanes/Haloarenes", "Alcohols, Phenols, Ethers", "Aldehydes, Ketones, Acids", "Amines", "Biomolecules", "Polymers", "Chemistry in Everyday Life"],
+    biology: ["The Living World", "Biological Classification", "Plant Kingdom", "Animal Kingdom", "Morphology - Flowering Plants", "Anatomy - Flowering Plants", "Structural Organisation - Animals", "Cell: Unit of Life", "Biomolecules", "Cell Cycle & Division", "Transport in Plants", "Mineral Nutrition", "Photosynthesis", "Respiration in Plants", "Plant Growth & Development", "Digestion & Absorption", "Breathing & Gases", "Body Fluids & Circulation", "Excretory Products", "Locomotion & Movement", "Neural Control", "Chemical Coordination", "Reproduction in Organisms", "Sexual Reproduction - Plants", "Human Reproduction", "Reproductive Health", "Inheritance & Variation", "Molecular Basis of Inheritance", "Evolution", "Human Health & Disease", "Food Production Strategies", "Microbes in Human Welfare", "Biotech: Principles", "Biotech: Applications", "Organisms & Populations", "Ecosystem", "Biodiversity & Conservation", "Environmental Issues"],
   };
 
   useEffect(() => {
@@ -113,7 +117,7 @@ export default function QuestionGeneratorPage() {
       };
       const output = await generateRandomQuestion(input);
       logActivity("Quiz Generation", `Successfully fetched question: ${output.question.substring(0,30)}...`);
-      return { ...output, id: crypto.randomUUID() }; // Add a unique ID for this instance
+      return { ...output, id: crypto.randomUUID() };
     } catch (err) {
       console.error("Error generating question:", err);
       const errorMessage = err instanceof Error ? err.message : "Unknown error generating question.";
@@ -131,54 +135,64 @@ export default function QuestionGeneratorPage() {
     setCurrentQuestionSet([]);
     setScore(0);
     setSelectedAnswer(undefined);
+    setOverallError(null);
     
     const firstQuestion = await fetchNewQuestion();
     if (firstQuestion) {
       setCurrentQuestionSet([firstQuestion]);
     } else {
-      setQuizState('configuring'); // Go back if first question fails
+      setQuizState('configuring'); 
     }
   };
 
   const handleNextQuestion = async () => {
-    if (selectedAnswer === undefined) {
+    if (selectedAnswer === undefined && currentQuestionIndex < currentQuestionSet.length) { // Check if there is a question to answer
         toast({variant: "destructive", title: "No Answer Selected", description: "Please select an answer before proceeding."});
         return;
     }
 
-    // Record answer for current question
     const updatedCurrentQuestionSet = [...currentQuestionSet];
-    updatedCurrentQuestionSet[currentQuestionIndex].userAnswerIndex = parseInt(selectedAnswer, 10);
-     updatedCurrentQuestionSet[currentQuestionIndex].isCorrect = 
-        updatedCurrentQuestionSet[currentQuestionIndex].userAnswerIndex === updatedCurrentQuestionSet[currentQuestionIndex].correctAnswerIndex;
-    
-    if (updatedCurrentQuestionSet[currentQuestionIndex].isCorrect) {
-        setScore(prevScore => prevScore + 1);
+    if (currentQuestionIndex < updatedCurrentQuestionSet.length) { // Ensure current question exists
+        updatedCurrentQuestionSet[currentQuestionIndex].userAnswerIndex = parseInt(selectedAnswer!, 10);
+        updatedCurrentQuestionSet[currentQuestionIndex].isCorrect = 
+            updatedCurrentQuestionSet[currentQuestionIndex].userAnswerIndex === updatedCurrentQuestionSet[currentQuestionIndex].correctAnswerIndex;
+        
+        if (updatedCurrentQuestionSet[currentQuestionIndex].isCorrect) {
+            setScore(prevScore => prevScore + 1);
+        }
     }
     setCurrentQuestionSet(updatedCurrentQuestionSet);
 
-
-    // Move to next question or finish
     if (currentQuestionIndex < numberOfQuestions - 1) {
-      setSelectedAnswer(undefined); // Reset selected answer for next question
+      setSelectedAnswer(undefined);
       setCurrentQuestionIndex(prevIndex => prevIndex + 1);
-      // Fetch next question if not already fetched
       if (currentQuestionIndex + 1 >= updatedCurrentQuestionSet.length) {
         const nextQ = await fetchNewQuestion();
         if (nextQ) {
           setCurrentQuestionSet(prevSet => [...prevSet, nextQ]);
         } else {
-          // Handle error, maybe allow retry or end quiz prematurely
-          toast({variant: "destructive", title: "Failed to load next question", description: "You can review your current progress."});
-          setQuizState('completed'); // End quiz if a question fails to load mid-quiz
+          toast({variant: "destructive", title: "Failed to load next question", description: "You can review your current progress or restart."});
+          setQuizState('completed');
           logActivity("Quiz Error", "Failed to load next question mid-quiz", { attempted: currentQuestionIndex + 1});
           return;
         }
       }
     } else {
-      // Quiz finished
+      const finalScore = updatedCurrentQuestionSet[currentQuestionIndex]?.isCorrect ? score +1 : score; // Adjust score if last q was just answered
+      const finalTotalQuestions = updatedCurrentQuestionSet.length;
+      const finalAccuracy = finalTotalQuestions > 0 ? (finalScore / finalTotalQuestions) * 100 : 0;
+      
+      const newLastScore: LastQuizScore = {
+          score: finalScore,
+          totalQuestions: finalTotalQuestions,
+          accuracy: finalAccuracy,
+          timestamp: new Date().toISOString(),
+      };
+      saveToLocalStorage(LAST_QUIZ_SCORE_KEY, newLastScore);
+      setLastQuizScore(newLastScore);
+
       setQuizState('completed');
-      logActivity("Quiz Completed", `User finished quiz. Score: ${score + (updatedCurrentQuestionSet[currentQuestionIndex].isCorrect ? 1:0)}/${numberOfQuestions}`, { score: score + (updatedCurrentQuestionSet[currentQuestionIndex].isCorrect ? 1:0), total: numberOfQuestions });
+      logActivity("Quiz Completed", `User finished quiz. Score: ${finalScore}/${finalTotalQuestions}`, { score: finalScore, total: finalTotalQuestions });
     }
   };
   
@@ -190,12 +204,24 @@ export default function QuestionGeneratorPage() {
   const handleSaveIndividualQuestion = (questionData: GenerateRandomQuestionOutput) => {
     const newSavedQuestion: SavedQuizQuestion = {
       ...questionData,
-      id: crypto.randomUUID(), // This is for the saved list item, not the quiz instance
+      id: crypto.randomUUID(),
       savedAt: new Date().toISOString(),
     };
     setSavedIndividualQuestions(prev => [newSavedQuestion, ...prev]);
     toast({title: "Question Saved!", description: "This question has been added to your saved questions list."});
     logActivity("Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`);
+  };
+
+  const handleCopyQuestion = (questionText: string) => {
+    navigator.clipboard.writeText(questionText)
+      .then(() => {
+        toast({ title: "Question Copied!", description: "Question text copied to clipboard." });
+        logActivity("Question Action", "Question text copied.", { length: questionText.length });
+      })
+      .catch(err => {
+        toast({ variant: "destructive", title: "Copy Failed", description: "Could not copy question to clipboard." });
+        console.error("Failed to copy question: ", err);
+      });
   };
 
   const handleExplainThisQuestion = async (qText: string) => {
@@ -214,6 +240,7 @@ export default function QuestionGeneratorPage() {
         const errorMessage = err instanceof Error ? err.message : "Unknown error explaining question.";
         setDetailedExplanation(`Failed to get detailed explanation: ${errorMessage}`);
         toast({ variant: "destructive", title: "Explanation Error", description: errorMessage});
+        logActivity("Explanation Error", `Failed to explain question: "${qText.substring(0,50)}..."`, { error: errorMessage });
      } finally {
         setIsExplaining(false);
      }
@@ -230,11 +257,11 @@ export default function QuestionGeneratorPage() {
         </div>
       );
     }
-     if (!currentQuestionData) { // Should ideally not happen if logic is correct
+     if (!currentQuestionData) {
         return (
              <div className="space-y-6 flex flex-col items-center justify-center min-h-[calc(100vh-10rem)]">
                 <XCircle className="h-12 w-12 text-destructive mb-2" />
-                <p className="text-destructive-foreground text-lg">Error loading question.</p>
+                <p className="text-lg">Error loading question.</p>
                 <p className="text-muted-foreground mb-4">{overallError || "An unexpected error occurred."}</p>
                 <Button onClick={handleRestartQuiz}><RotateCcw className="mr-2 h-4 w-4"/>Try Again</Button>
             </div>
@@ -286,7 +313,7 @@ export default function QuestionGeneratorPage() {
   }
 
   if (quizState === 'completed') {
-    const accuracy = numberOfQuestions > 0 ? (score / currentQuestionSet.length) * 100 : 0; // Use currentQuestionSet.length in case quiz ended early
+    const accuracy = currentQuestionSet.length > 0 ? (score / currentQuestionSet.length) * 100 : 0;
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -302,35 +329,37 @@ export default function QuestionGeneratorPage() {
           </CardHeader>
           <CardContent>
             <h3 className="text-xl font-semibold mb-4 mt-6 text-center">Review Your Answers</h3>
-            <ScrollArea className="max-h-[60vh] p-1">
-            <div className="space-y-4">
-              {currentQuestionSet.map((q, index) => (
-                <Card key={q.id} className={`p-4 ${q.isCorrect ? 'border-green-500 bg-green-500/5' : 'border-destructive bg-destructive/5'}`}>
-                  <p className="font-semibold">Q{index + 1}: {q.question}</p>
-                  <div className="mt-2 space-y-1 text-sm">
-                    {q.options.map((opt, optIndex) => (
-                      <div key={optIndex} 
-                           className={`flex items-center p-1.5 rounded-md
-                                       ${optIndex === q.correctAnswerIndex ? 'bg-green-500/20 text-green-700 dark:text-green-300 font-medium' : ''}
-                                       ${optIndex === q.userAnswerIndex && optIndex !== q.correctAnswerIndex ? 'bg-red-500/20 text-red-700 dark:text-red-400 line-through' : ''}
-                                       ${optIndex === q.userAnswerIndex && optIndex === q.correctAnswerIndex ? 'ring-2 ring-green-500' : ''}
-                                       `}>
-                        {optIndex === q.userAnswerIndex && q.isCorrect && <CheckCircle className="h-4 w-4 mr-2 text-green-500 shrink-0"/>}
-                        {optIndex === q.userAnswerIndex && !q.isCorrect && <XCircle className="h-4 w-4 mr-2 text-red-500 shrink-0"/>}
-                        {optIndex !== q.userAnswerIndex && optIndex === q.correctAnswerIndex && <CheckCircle className="h-4 w-4 mr-2 text-green-500 shrink-0 opacity-50"/>}
-                         <span className="ml-4 if_no_icon"></span> {/* Placeholder for spacing if no icon */}
-                        {opt}
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground"><strong className="text-accent">Explanation:</strong> {q.explanation}</p>
-                  <div className="mt-2 flex space-x-2">
-                     <Button variant="ghost" size="sm" onClick={() => handleSaveIndividualQuestion(q)} className="text-xs"><Save className="mr-1 h-3 w-3"/>Save this Q</Button>
-                     <Button variant="ghost" size="sm" onClick={() => handleExplainThisQuestion(q.question)} className="text-xs"><HelpCircle className="mr-1 h-3 w-3"/>Explain More</Button>
-                  </div>
-                </Card>
-              ))}
-            </div>
+            <ScrollArea className="h-[calc(100vh-30rem)] sm:h-[calc(100vh-28rem)] md:h-[50vh] p-1 border rounded-md">
+              <div className="space-y-4 p-3">
+                {currentQuestionSet.map((q, index) => (
+                  <Card key={q.id} className={`p-4 ${q.isCorrect ? 'border-green-500 bg-green-500/5' : 'border-destructive bg-destructive/5'}`}>
+                    <p className="font-semibold">Q{index + 1}: {q.question}</p>
+                    <div className="mt-2 space-y-1 text-sm">
+                      {q.options.map((opt, optIndex) => (
+                        <div key={optIndex} 
+                             className={`flex items-center p-1.5 rounded-md
+                                         ${optIndex === q.correctAnswerIndex ? 'bg-green-500/20 text-green-700 dark:text-green-300 font-medium' : ''}
+                                         ${optIndex === q.userAnswerIndex && optIndex !== q.correctAnswerIndex ? 'bg-red-500/20 text-red-700 dark:text-red-400 line-through' : ''}
+                                         ${optIndex === q.userAnswerIndex && optIndex === q.correctAnswerIndex ? 'ring-2 ring-green-500' : ''}
+                                         `}
+                        >
+                          {optIndex === q.userAnswerIndex && q.isCorrect && <CheckCircle className="h-4 w-4 mr-2 text-green-500 shrink-0"/>}
+                          {optIndex === q.userAnswerIndex && !q.isCorrect && <XCircle className="h-4 w-4 mr-2 text-red-500 shrink-0"/>}
+                          {optIndex !== q.userAnswerIndex && optIndex === q.correctAnswerIndex && <CheckCircle className="h-4 w-4 mr-2 text-green-500 shrink-0 opacity-50"/>}
+                           {!((optIndex === q.userAnswerIndex && q.isCorrect) || (optIndex === q.userAnswerIndex && !q.isCorrect) || (optIndex !== q.userAnswerIndex && optIndex === q.correctAnswerIndex)) && <span className="w-6 mr-2 shrink-0"></span>}
+                          {opt}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground"><strong className="text-accent">Explanation:</strong> {q.explanation}</p>
+                    <div className="mt-3 flex space-x-2">
+                       <Button variant="outline" size="sm" onClick={() => handleSaveIndividualQuestion(q)} className="text-xs"><Save className="mr-1.5 h-3.5 w-3.5"/>Save Q</Button>
+                       <Button variant="outline" size="sm" onClick={() => handleExplainThisQuestion(q.question)} className="text-xs"><HelpCircle className="mr-1.5 h-3.5 w-3.5"/>Explain More</Button>
+                       <Button variant="outline" size="sm" onClick={() => handleCopyQuestion(q.question)} className="text-xs"><Copy className="mr-1.5 h-3.5 w-3.5"/>Copy Q</Button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
             </ScrollArea>
           </CardContent>
         </Card>
@@ -338,10 +367,9 @@ export default function QuestionGeneratorPage() {
     );
   }
 
-  // Configuring state (default)
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center space-x-3">
           <FileQuestion className="h-8 w-8 text-primary" />
           <h1 className="text-3xl font-bold tracking-tight">AI Question Generator</h1>
@@ -357,14 +385,14 @@ export default function QuestionGeneratorPage() {
               <DialogTitle>Saved Individual Questions</DialogTitle>
               <DialogDescription>Review questions you've saved. These are not quiz results.</DialogDescription>
             </DialogHeader>
-            <ScrollArea className="max-h-[60vh] p-1">
+            <ScrollArea className="max-h-[60vh] p-1 mt-2">
               {savedIndividualQuestions.length > 0 ? (
                 <div className="space-y-4">
                   {savedIndividualQuestions.map(sq => (
                     <Card key={sq.id} className="bg-card/60">
                       <CardContent className="p-4 space-y-2">
                         <p className="text-sm font-semibold">Q: {sq.question}</p>
-                        <p className="text-xs">Options: {sq.options.join(" | ")}</p>
+                        <p className="text-xs">Options: {sq.options.map((o, i) => `${i+1}. ${o}`).join(" | ")}</p>
                         <p className="text-xs text-green-400">Correct: Option {sq.correctAnswerIndex + 1} ({sq.options[sq.correctAnswerIndex]})</p>
                         <p className="text-xs text-muted-foreground">Expl: {sq.explanation}</p>
                         <p className="text-xs text-muted-foreground/70">Saved: {new Date(sq.savedAt).toLocaleString()}</p>
@@ -451,7 +479,7 @@ export default function QuestionGeneratorPage() {
                     id="num-questions" 
                     type="number" 
                     value={numberOfQuestions} 
-                    onChange={(e) => setNumberOfQuestions(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))} // Min 1, Max 50
+                    onChange={(e) => setNumberOfQuestions(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
                     min="1" 
                     max="50"
                     disabled={isLoadingQuestion} />
@@ -489,13 +517,24 @@ export default function QuestionGeneratorPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Performance Overview</CardTitle>
-           <CardDescription>Track your accuracy and review past performance (feature coming soon).</CardDescription>
+           <CardDescription>Track your accuracy and review past performance.</CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="p-4 border rounded-lg">
             <h3 className="font-semibold flex items-center"><BarChart3 className="mr-2 h-5 w-5 text-accent"/>Last Quiz Accuracy</h3>
-            <p className="text-2xl font-bold">{quizState === 'completed' ? `${((score / currentQuestionSet.length) * 100).toFixed(0)}%` : '--%'}</p>
-            <p className="text-sm text-muted-foreground">{quizState === 'completed' ? `(${score}/${currentQuestionSet.length} correct)` : 'Complete a quiz to see accuracy'}</p>
+            {lastQuizScore ? (
+                <>
+                    <p className="text-2xl font-bold">{lastQuizScore.accuracy.toFixed(0)}%</p>
+                    <p className="text-sm text-muted-foreground">
+                        ({lastQuizScore.score}/{lastQuizScore.totalQuestions} correct on {new Date(lastQuizScore.timestamp).toLocaleDateString()})
+                    </p>
+                </>
+            ) : (
+                <>
+                    <p className="text-2xl font-bold">--%</p>
+                    <p className="text-sm text-muted-foreground">Complete a quiz to see accuracy</p>
+                </>
+            )}
           </div>
           <div className="p-4 border rounded-lg">
             <h3 className="font-semibold flex items-center"><History className="mr-2 h-5 w-5 text-accent"/>Performance History</h3>
