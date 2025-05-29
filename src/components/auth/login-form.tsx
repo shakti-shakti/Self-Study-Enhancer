@@ -14,7 +14,7 @@ import { Logo } from '@/components/icons/logo';
 
 export function LoginForm() {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState(''); // Password not used in mock, but good for UI
+  const [password, setPassword] = useState('');
   const { login, isLoading } = useAuth();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -22,15 +22,19 @@ export function LoginForm() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!email) { // Basic validation
+    if (!email) {
         setError("Email is required.");
         return;
     }
+    if (!password) {
+        setError("Password is required.");
+        return;
+    }
     try {
-      await login(email);
+      await login(email, password); // Pass password
       router.push('/'); // Redirect to dashboard
     } catch (err) {
-      setError("Failed to login. Please try again.");
+      setError(err instanceof Error ? err.message : "Failed to login. Please try again.");
       console.error(err);
     }
   };

@@ -17,8 +17,8 @@ interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
   isLoading: boolean;
-  login: (email: string, name?: string) => Promise<void>;
-  signup: (email: string, name: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  signup: (email: string, name: string, password: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -42,22 +42,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(false);
   }, []);
 
-  const login = useCallback(async (email: string, nameInput?: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const name = nameInput || email.split('@')[0] || 'User';
-    const loggedInUser: User = { id: '1', email, name, avatarUrl: `https://placehold.co/100x100.png?text=${name.charAt(0)}` };
-    setUser(loggedInUser);
-    localStorage.setItem(MOCK_USER_KEY, JSON.stringify(loggedInUser));
+    await new Promise(resolve => setTimeout(resolve, 500)); // Simulate API
+
+    if (!password) { // Password is now checked
+      setIsLoading(false);
+      throw new Error("Password is required for login.");
+    }
+
+    const storedUserJson = localStorage.getItem(MOCK_USER_KEY);
+    if (storedUserJson) {
+      const storedUser: User = JSON.parse(storedUserJson);
+      if (storedUser.email === email) {
+        // In a real app, you'd validate the password here.
+        // For this mock, if email matches and password was provided, we "log in".
+        setUser(storedUser);
+        setIsLoading(false);
+        return;
+      }
+    }
     setIsLoading(false);
+    throw new Error("Login failed. User not found or incorrect credentials.");
   }, []);
 
-  const signup = useCallback(async (email: string, name: string) => {
+  const signup = useCallback(async (email: string, name: string, password: string) => {
     setIsLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const newUser: User = { id: '1', email, name, avatarUrl: `https://placehold.co/100x100.png?text=${name.charAt(0)}` };
+    await new Promise(resolve => setTimeout(resolve, 500)); // Simulate API
+
+    if (!password) { // Password is now checked
+      setIsLoading(false);
+      throw new Error("Password is required for signup.");
+    }
+    // For this mock, signup will overwrite any existing MOCK_USER_KEY.
+    // A real app would check for email uniqueness in a database.
+    const newUser: User = { id: Date.now().toString(), email, name, avatarUrl: `https://placehold.co/100x100.png?text=${name.charAt(0)}` };
     setUser(newUser);
     localStorage.setItem(MOCK_USER_KEY, JSON.stringify(newUser));
     setIsLoading(false);

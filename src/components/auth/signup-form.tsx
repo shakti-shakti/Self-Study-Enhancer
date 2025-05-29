@@ -23,7 +23,7 @@ export function SignupForm() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!name || !email || !password) { // Basic validation
+    if (!name || !email || !password) {
         setError("All fields are required.");
         return;
     }
@@ -32,10 +32,10 @@ export function SignupForm() {
         return;
     }
     try {
-      await signup(email, name);
+      await signup(email, name, password); // Pass password
       router.push('/'); // Redirect to dashboard
     } catch (err) {
-      setError("Failed to sign up. Please try again.");
+      setError(err instanceof Error ? err.message : "Failed to sign up. Please try again.");
       console.error(err);
     }
   };
