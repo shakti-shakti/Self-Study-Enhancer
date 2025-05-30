@@ -30,15 +30,15 @@ import { cn } from '@/lib/utils';
 import { logActivity } from '@/lib/activity-logger';
 
 interface CustomTask {
-  id: string; // UUID from Supabase
+  id: string; 
   user_id: string;
   title: string;
-  description?: string;
+  description?: string | null; // Allow null from Supabase
   completed: boolean;
   category: string;
-  task_date?: string; // ISO string for the date (YYYY-MM-DD)
-  has_reminder?: boolean;
-  reminder_time?: string; // HH:MM
+  task_date?: string | null; 
+  has_reminder?: boolean | null;
+  reminder_time?: string | null; 
   created_at?: string;
   updated_at?: string;
 }
@@ -61,8 +61,12 @@ export default function CustomTasksPage() {
   const [taskHasReminder, setTaskHasReminder] = useState(false);
   const [taskReminderTime, setTaskReminderTime] = useState('09:00');
 
-  const fetchTasks = async () => {
-    if (!user) return;
+  const fetchTasks = useCallback(async () => {
+    if (!user) {
+      setCustomTasks([]);
+      setIsLoadingTasks(false);
+      return;
+    }
     setIsLoadingTasks(true);
     try {
       const { data, error } = await supabase
@@ -75,17 +79,17 @@ export default function CustomTasksPage() {
       setCustomTasks(data || []);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching Tasks", description: (error as Error).message });
-      logActivity("Custom Tasks Error", "Failed to fetch custom tasks", { error: (error as Error).message }, user?.id);
+      if (user) logActivity("Custom Tasks Error", "Failed to fetch custom tasks", { error: (error as Error).message }, user.id);
     } finally {
       setIsLoadingTasks(false);
     }
-  };
+  }, [user, toast]);
 
   useEffect(() => {
-    if (user && !authLoading) {
+     if (!authLoading) {
       fetchTasks();
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, fetchTasks]);
 
   const handleOpenDialog = (task?: CustomTask) => {
     if (task) {
@@ -136,7 +140,7 @@ export default function CustomTasksPage() {
     };
 
     try {
-      if (currentEditingTask.id) { // Editing
+      if (currentEditingTask.id) { 
         const { error } = await supabase
           .from('custom_tasks')
           .update({ ...taskDataToSave, updated_at: new Date().toISOString() })
@@ -145,21 +149,21 @@ export default function CustomTasksPage() {
         if (error) throw error;
         toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
         logActivity("Custom Tasks", `Task updated: "${taskTitle}"`, { taskId: currentEditingTask.id }, user.id);
-      } else { // Adding
+      } else { 
         const { data, error } = await supabase
           .from('custom_tasks')
           .insert(taskDataToSave)
           .select()
-          .single(); // to get the inserted row back for its ID if needed
+          .single(); 
         if (error) throw error;
         toast({ title: "Task Added", description: `"${taskTitle}" has been added.` });
-        logActivity("Custom Tasks", `Task added: "${taskTitle}"`, { taskId: data?.id }, user.id);
+        if (data) logActivity("Custom Tasks", `Task added: "${taskTitle}"`, { taskId: data.id }, user.id);
       }
       fetchTasks();
       setIsFormOpen(false);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Saving Task", description: (error as Error).message });
-      logActivity("Custom Tasks Error", "Failed to save custom task", { error: (error as Error).message, taskTitle }, user.id);
+      if(user) logActivity("Custom Tasks Error", "Failed to save custom task", { error: (error as Error).message, taskTitle }, user.id);
     } finally {
       setIsSubmitting(false);
     }
@@ -178,17 +182,17 @@ export default function CustomTasksPage() {
         .eq('id', taskId)
         .eq('user_id', user.id);
       if (error) {
-        fetchTasks(); // Revert on error
+        fetchTasks(); 
         throw error;
       }
-      const task = customTasks.find(t=>t.id === taskId); // Get original task for title
-      if(task) {
+      const task = customTasks.find(t=>t.id === taskId); 
+      if(task && user) {
         toast({title: `Task ${!currentStatus ? 'Completed' : 'Marked Incomplete'}`, description: `"${task.title}"`});
         logActivity("Custom Tasks", `Task ${!currentStatus ? 'completed' : 'marked incomplete'}: "${task.title}"`, { taskId }, user.id);
       }
     } catch (error) {
       toast({ variant: "destructive", title: "Error Updating Task", description: (error as Error).message });
-      logActivity("Custom Tasks Error", "Failed to toggle task completion", { error: (error as Error).message, taskId }, user.id);
+      if (user) logActivity("Custom Tasks Error", "Failed to toggle task completion", { error: (error as Error).message, taskId }, user.id);
     }
   };
 
@@ -197,7 +201,7 @@ export default function CustomTasksPage() {
     const taskToDelete = customTasks.find(t => t.id === taskId);
     if (!taskToDelete) return;
 
-    setCustomTasks(customTasks.filter(t => t.id !== taskId)); // Optimistic delete
+    setCustomTasks(customTasks.filter(t => t.id !== taskId)); 
 
     try {
       const { error } = await supabase
@@ -206,18 +210,18 @@ export default function CustomTasksPage() {
         .eq('id', taskId)
         .eq('user_id', user.id);
       if (error) {
-        fetchTasks(); // Revert on error
+        fetchTasks(); 
         throw error;
       }
       toast({ variant: "destructive", title: "Task Deleted", description: `"${taskToDelete.title}" removed.` });
-      logActivity("Custom Tasks", `Task deleted: "${taskToDelete.title}"`, { taskId }, user.id);
+      if(user) logActivity("Custom Tasks", `Task deleted: "${taskToDelete.title}"`, { taskId }, user.id);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Deleting Task", description: (error as Error).message });
-      logActivity("Custom Tasks Error", "Failed to delete task", { error: (error as Error).message, taskId }, user.id);
+      if(user) logActivity("Custom Tasks Error", "Failed to delete task", { error: (error as Error).message, taskId }, user.id);
     }
   };
 
-  if (authLoading || (isLoadingTasks && !customTasks.length && !user)) {
+  if (authLoading) {
      return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -309,12 +313,16 @@ export default function CustomTasksPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Personal Task Board</CardTitle>
-          <CardDescription>Manage personal tasks outside of your academic schedules. Data saved to your account.</CardDescription>
+          <CardDescription>Manage personal tasks. Data saved to your Supabase account.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoadingTasks ? (
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : !user ? (
+            <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+                <p className="text-muted-foreground">Please log in to manage your custom tasks.</p>
             </div>
           ) : customTasks.length > 0 ? (
             <ul className="space-y-3">
@@ -355,4 +363,3 @@ export default function CustomTasksPage() {
     </div>
   );
 }
-    

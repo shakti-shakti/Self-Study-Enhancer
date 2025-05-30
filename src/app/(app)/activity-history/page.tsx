@@ -6,8 +6,6 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { History, ListFilter, Trash2, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getActivityLog, type ActivityLog, deleteActivityLogEntry, clearUserActivityLog } from "@/lib/activity-logger"; 
-import { formatDistanceToNow } from 'date-fns';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,8 +17,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/use-auth";
+import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/use-auth';
+import { supabase } from '@/lib/supabaseClient';
+import { formatDistanceToNow } from 'date-fns';
+import type { ActivityLog } from '@/lib/activity-logger'; // Use the interface
 
 export default function ActivityHistoryPage() {
   const { user, isLoading: authLoading } = useAuth();
@@ -30,11 +31,22 @@ export default function ActivityHistoryPage() {
   const { toast } = useToast();
 
   const fetchActivities = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      setActivities([]);
+      setIsLoadingActivities(false);
+      return;
+    }
     setIsLoadingActivities(true);
     try {
-      const logs = await getActivityLog(user.id);
-      setActivities(logs);
+      const { data, error } = await supabase
+        .from('activity_logs')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('timestamp', { ascending: false })
+        .limit(50); // Limit to 50 for performance
+
+      if (error) throw error;
+      setActivities(data || []);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching History", description: (error as Error).message });
     } finally {
@@ -43,34 +55,42 @@ export default function ActivityHistoryPage() {
   }, [user, toast]);
 
   useEffect(() => {
-    if (user && !authLoading) {
+    if (!authLoading) { // Wait for auth to resolve
       fetchActivities();
     }
   }, [user, authLoading, fetchActivities]);
   
   const handleClearAllHistory = async () => {
     if (!user) return;
-    const success = await clearUserActivityLog(user.id);
-    if (success) {
-      setActivities([]); 
-      toast({ title: "History Cleared", description: "Your entire activity log has been cleared." });
-      // Optionally log this specific clearing action if system logs are separate
-      // logActivity("System", "Activity history completely cleared by user.", undefined, user.id);
-    } else {
-      toast({ variant: "destructive", title: "Error", description: "Could not clear history." });
+    try {
+        const { error } = await supabase
+            .from('activity_logs')
+            .delete()
+            .eq('user_id', user.id);
+        if (error) throw error;
+        setActivities([]); 
+        toast({ title: "History Cleared", description: "Your entire activity log has been cleared." });
+    } catch (error) {
+        toast({ variant: "destructive", title: "Error Clearing History", description: (error as Error).message });
     }
   };
 
   const handleDeleteSpecificActivity = async (activityId: string) => {
     if (!user || !activityId) return;
     const deletedActivity = activities.find(a => a.id === activityId);
-    const success = await deleteActivityLogEntry(activityId, user.id);
     
-    if (success) {
-      setActivities(prevActivities => prevActivities.filter(activity => activity.id !== activityId));
-      toast({ title: "Activity Deleted", description: `Removed: "${deletedActivity?.description.substring(0,30)}..."` });
-    } else {
-      toast({ variant: "destructive", title: "Error", description: "Could not delete activity." });
+    try {
+        const { error } = await supabase
+            .from('activity_logs')
+            .delete()
+            .eq('id', activityId)
+            .eq('user_id', user.id);
+        if (error) throw error;
+        
+        setActivities(prevActivities => prevActivities.filter(activity => activity.id !== activityId));
+        toast({ title: "Activity Deleted", description: `Removed: "${deletedActivity?.description.substring(0,30)}..."` });
+    } catch (error) {
+        toast({ variant: "destructive", title: "Error Deleting Activity", description: (error as Error).message });
     }
   };
 
@@ -94,7 +114,7 @@ export default function ActivityHistoryPage() {
         </div>
         <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" disabled={activities.length === 0 || isLoadingActivities}>
+              <Button variant="destructive" disabled={activities.length === 0 || isLoadingActivities || !user}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Clear All History
               </Button>
@@ -118,7 +138,7 @@ export default function ActivityHistoryPage() {
        <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Recent Interactions</CardTitle>
-          <CardDescription>Tracks completed tasks, solved tests, viewed content, and other app interactions stored in Supabase.</CardDescription>
+          <CardDescription>Tracks your interactions within the app, stored in Supabase.</CardDescription>
            <div className="pt-4">
             <Label htmlFor="filter-activities" className="sr-only">Filter activities</Label>
             <div className="flex items-center space-x-2">
@@ -128,8 +148,9 @@ export default function ActivityHistoryPage() {
                     value={filterTerm}
                     onChange={(e) => setFilterTerm(e.target.value)}
                     className="max-w-sm"
+                    disabled={!user}
                 />
-                <Button variant="outline" size="icon" aria-label="Search activities"><Search className="h-4 w-4"/></Button>
+                <Button variant="outline" size="icon" aria-label="Search activities" disabled={!user}><Search className="h-4 w-4"/></Button>
             </div>
           </div>
         </CardHeader>
@@ -137,6 +158,10 @@ export default function ActivityHistoryPage() {
           {isLoadingActivities ? (
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : !user ? (
+            <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+             <p className="text-muted-foreground">Please log in to view your activity history.</p>
             </div>
           ) : filteredActivities.length > 0 ? (
             <ul className="space-y-4">
@@ -146,7 +171,7 @@ export default function ActivityHistoryPage() {
                     <div className="flex-1">
                       <p className="font-semibold">{activity.type}</p>
                       <p className="text-sm text-muted-foreground">{activity.description}</p>
-                      {activity.details?.score !== undefined && activity.details?.total !== undefined && (
+                      {activity.details && typeof activity.details.score === 'number' && typeof activity.details.total === 'number' && (
                         <p className="text-xs text-accent">Score: {activity.details.score}/{activity.details.total}</p>
                       )}
                       {activity.details && Object.entries(activity.details).map(([key, value]) => {
@@ -180,5 +205,3 @@ export default function ActivityHistoryPage() {
     </div>
   );
 }
-
-    

@@ -1,13 +1,14 @@
 
 "use client";
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Lightbulb, Target, CheckCircle, BarChart3, Clock, Edit, Save, Loader2 } from "lucide-react";
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import TaskManagement from '@/components/TaskManagement'; // This component is using localStorage, might need review
+// TaskManagement component seems like a standalone localStorage example, consider integrating its purpose or removing if redundant
+// import TaskManagement from '@/components/TaskManagement'; 
 import {
   Dialog,
   DialogContent,
@@ -23,8 +24,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabaseClient';
 import { format, parseISO } from 'date-fns';
 
-// Still using localStorage for this one, can be migrated to dashboard_configurations if needed.
-const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
+const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore'; // This will be replaced by Supabase data eventually
 
 interface LastQuizScore {
   score: number;
@@ -56,7 +56,7 @@ const syllabusFacts = [
 export default function DashboardPage() {
   const { toast } = useToast();
   const { user, isLoading: authLoading } = useAuth();
-  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null);
+  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null); // Still from localStorage for now
   const [randomFact, setRandomFact] = useState(syllabusFacts[0]);
 
   const [countdownConfig, setCountdownConfig] = useState<CountdownConfig | null>(null);
@@ -65,10 +65,34 @@ export default function DashboardPage() {
   const [isCountdownDialogOpen, setIsCountdownDialogOpen] = useState(false);
   const [isSubmittingCountdown, setIsSubmittingCountdown] = useState(false);
   const [tempEventName, setTempEventName] = useState('');
-  const [tempEventDate, setTempEventDate] = useState(''); // YYYY-MM-DD
+  const [tempEventDate, setTempEventDate] = useState(''); 
 
-  const fetchCountdownConfig = async () => {
-    if (!user) return;
+  const getDefaultNeetDate = useCallback(() => {
+      const today = new Date();
+      let nextMay = new Date(today.getFullYear(), 4, 5); 
+      if (today.getMonth() > 4 || (today.getMonth() === 4 && today.getDate() > 5)) { // If past May 5th
+        nextMay.setFullYear(today.getFullYear() + 1);
+      }
+      return format(nextMay, 'yyyy-MM-dd');
+  }, []);
+
+  const fetchCountdownConfig = useCallback(async () => {
+    if (!user) {
+        setIsLoadingCountdown(false);
+        const localConfig = localStorage.getItem('dashboardCountdownConfig');
+        if (localConfig) {
+            const parsedConfig = JSON.parse(localConfig) as CountdownConfig;
+            setCountdownConfig(parsedConfig);
+            setTempEventName(parsedConfig.eventName);
+            setTempEventDate(parsedConfig.eventDate);
+        } else {
+            const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+            setCountdownConfig(defaultConfig);
+            setTempEventName(defaultConfig.eventName);
+            setTempEventDate(defaultConfig.eventDate);
+        }
+        return;
+    }
     setIsLoadingCountdown(true);
     try {
       const { data, error } = await supabase
@@ -77,59 +101,56 @@ export default function DashboardPage() {
         .eq('user_id', user.id)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error; // PGRST116: no rows found
+      if (error && error.code !== 'PGRST116') throw error; 
 
-      if (data) {
-        setCountdownConfig({ eventName: data.countdown_event_name || "NEET Exam", eventDate: data.countdown_event_date || getDefaultNeetDate() });
-        setTempEventName(data.countdown_event_name || "NEET Exam");
-        setTempEventDate(data.countdown_event_date || getDefaultNeetDate());
+      if (data && data.countdown_event_name && data.countdown_event_date) {
+        setCountdownConfig({ eventName: data.countdown_event_name, eventDate: data.countdown_event_date });
+        setTempEventName(data.countdown_event_name);
+        setTempEventDate(data.countdown_event_date);
       } else {
         const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
         setCountdownConfig(defaultConfig);
         setTempEventName(defaultConfig.eventName);
         setTempEventDate(defaultConfig.eventDate);
-        // Optionally save default to DB if user has no config yet
-        await supabase.from('dashboard_configurations').upsert({ user_id: user.id, countdown_event_name: defaultConfig.eventName, countdown_event_date: defaultConfig.eventDate });
+        
+        const { error: upsertError } = await supabase
+            .from('dashboard_configurations')
+            .upsert({ 
+                user_id: user.id, 
+                countdown_event_name: defaultConfig.eventName, 
+                countdown_event_date: defaultConfig.eventDate,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id' });
+        if(upsertError) console.error("Error saving default countdown to Supabase:", upsertError);
       }
     } catch (err) {
-      console.error("Error fetching countdown config:", err);
+      console.error("Error fetching/setting countdown config from Supabase:", err);
       const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
-      setCountdownConfig(defaultConfig); // Fallback to default
+      setCountdownConfig(defaultConfig); 
       setTempEventName(defaultConfig.eventName);
       setTempEventDate(defaultConfig.eventDate);
     } finally {
       setIsLoadingCountdown(false);
     }
-  };
+  }, [user, getDefaultNeetDate]);
   
-  const getDefaultNeetDate = () => {
-      const today = new Date();
-      let nextMay = new Date(today.getFullYear(), 4, 5); // May is month 4
-      if (today > nextMay) {
-        nextMay.setFullYear(today.getFullYear() + 1);
-      }
-      return format(nextMay, 'yyyy-MM-dd');
-  }
-
 
   useEffect(() => {
-    // Load last quiz score from localStorage
     const storedScore = localStorage.getItem(LAST_QUIZ_SCORE_KEY);
     if (storedScore) setLastQuizScore(JSON.parse(storedScore));
     
     setRandomFact(syllabusFacts[Math.floor(Math.random() * syllabusFacts.length)]);
 
-    if (user && !authLoading) {
+    if (!authLoading) {
       fetchCountdownConfig();
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, fetchCountdownConfig]);
 
   useEffect(() => {
     if (!countdownConfig || !countdownConfig.eventDate) return;
 
     const calculateTimeLeft = () => {
-      // Ensure eventDate is treated as local date then converted to UTC start of day for calculation
-      const targetDate = new Date(countdownConfig.eventDate + "T00:00:00Z"); // Assuming eventDate is YYYY-MM-DD, interpret as UTC start of day
+      const targetDate = new Date(countdownConfig.eventDate + "T00:00:00"); // Treat as local date for countdown
       const difference = +targetDate - +new Date();
       let newTimeLeft = { days: 0, hours: 0, minutes: 0, seconds: 0 };
 
@@ -151,16 +172,25 @@ export default function DashboardPage() {
 
   const handleSaveCountdown = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
     if (!tempEventName || !tempEventDate) {
       toast({ variant: "destructive", title: "Error", description: "Event name and date are required." });
       return;
     }
-    setIsSubmittingCountdown(true);
+    
     const newConfig: CountdownConfig = {
       eventName: tempEventName,
-      eventDate: tempEventDate, // Already YYYY-MM-DD
+      eventDate: tempEventDate,
     };
+    setCountdownConfig(newConfig); // Optimistic update for UI
+    setIsCountdownDialogOpen(false);
+
+    if (!user) { // Save to localStorage if not logged in
+        localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig));
+        toast({ title: "Countdown Updated (Locally)", description: `Timer set for ${newConfig.eventName}.` });
+        return;
+    }
+
+    setIsSubmittingCountdown(true);
     try {
       const { error } = await supabase
         .from('dashboard_configurations')
@@ -172,33 +202,29 @@ export default function DashboardPage() {
         }, { onConflict: 'user_id' });
       
       if (error) throw error;
-
-      setCountdownConfig(newConfig);
-      setIsCountdownDialogOpen(false);
-      toast({ title: "Countdown Updated", description: `Timer set for ${newConfig.eventName}.` });
+      toast({ title: "Countdown Updated (Supabase)", description: `Timer set for ${newConfig.eventName}.` });
     } catch (err) {
-      toast({ variant: "destructive", title: "Error Saving Countdown", description: (err as Error).message });
+      toast({ variant: "destructive", title: "Error Saving Countdown to Supabase", description: (err as Error).message });
+      localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig)); // Fallback to local if Supabase fails
     } finally {
         setIsSubmittingCountdown(false);
     }
   };
   
-  if (authLoading && !user) {
+  if (authLoading && !user && isLoadingCountdown) { // Show loader if auth is loading and user isn't set yet
     return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold tracking-tight">Welcome to NEET Prep Pro!</h1>
-
-      <TaskManagement /> {/* This TaskManagement is still using localStorage - needs migration if its data should be per-user and persistent */}
+      <h1 className="text-3xl font-bold tracking-tight">Welcome{user ? `, ${user.name || 'User'}` : ''}!</h1>
       
       {isLoadingCountdown ? (
         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
           <CardHeader><CardTitle><Loader2 className="mr-2 h-5 w-5 animate-spin inline-block"/>Loading Countdown...</CardTitle></CardHeader>
-          <CardContent className="h-24"></CardContent> {/* Placeholder height */}
+          <CardContent className="h-24"></CardContent>
         </Card>
-      ) : countdownConfig && (
+      ) : countdownConfig ? (
         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
           <CardHeader className="pb-2">
             <div className="flex justify-between items-center">
@@ -244,6 +270,11 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+      ) : (
+         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
+          <CardHeader><CardTitle>Set Countdown</CardTitle></CardHeader>
+          <CardContent><p>Could not load countdown configuration. You can set one by clicking the edit icon.</p></CardContent>
+        </Card>
       )}
 
       <Card className="shadow-lg bg-gradient-to-r from-primary/10 to-accent/10 border-primary/30">
@@ -282,26 +313,30 @@ export default function DashboardPage() {
         <Card className="hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center space-x-2 pb-2">
             <CheckCircle className="h-5 w-5 text-accent"/>
-            <CardTitle className="text-lg">Quick Tasks</CardTitle>
+            <CardTitle className="text-lg">Quick Tasks & Planners</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="mt-1 space-y-1">
-                 <Link href="/tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Manage Task Reminders</Button></Link>
-                 <Link href="/custom-tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Custom Tasks</Button></Link>
-                 <Link href="/day-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open Day Planner</Button></Link>
+                 <Link href="/tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Task Reminders</Button></Link>
+                 <Link href="/custom-tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Custom Tasks</Button></Link>
+                 <Link href="/day-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Day Planner</Button></Link>
+                 <Link href="/month-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Month Planner</Button></Link>
+                 <Link href="/year-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Year Planner</Button></Link>
             </div>
           </CardContent>
         </Card>
         <Card className="hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center space-x-2 pb-2">
             <BarChart3 className="h-5 w-5 text-accent"/>
-            <CardTitle className="text-lg">Quick Links</CardTitle>
+            <CardTitle className="text-lg">Tools & Resources</CardTitle>
           </CardHeader>
           <CardContent>
              <div className="mt-1 space-y-1">
                  <Link href="/ai-assistant" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Chat with AI Assistant</Button></Link>
                  <Link href="/ncert-viewer" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open NCERT Viewer</Button></Link>
                 <Link href="/activity-history" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Activity History</Button></Link>
+                 <Link href="/files" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">My Files</Button></Link>
+                 <Link href="/dictionary" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">AI Dictionary</Button></Link>
             </div>
           </CardContent>
         </Card>
@@ -309,4 +344,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-    

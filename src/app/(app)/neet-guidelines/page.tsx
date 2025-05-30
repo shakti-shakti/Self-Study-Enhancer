@@ -1,7 +1,7 @@
 
 "use client";
-import { useState, useEffect, type FormEvent } from 'react';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
+import { useState, useEffect, type FormEvent, useCallback } from 'react';
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BookOpenCheck, PlusCircle, Edit2, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,13 +22,26 @@ import { useToast } from '@/hooks/use-toast';
 import { logActivity } from '@/lib/activity-logger';
 import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabaseClient';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogHeader as AlertDialogHeaderPrimitive, // Alias to avoid conflict
+  AlertDialogContent as AlertDialogContentPrimitive,
+  AlertDialogDescription as AlertDialogDescriptionPrimitive,
+  AlertDialogFooter as AlertDialogFooterPrimitive,
+  AlertDialogTitle as AlertDialogTitlePrimitive,
+  AlertDialogTrigger as AlertDialogTriggerPrimitive,
+} from "@/components/ui/alert-dialog";
+
 
 interface GuidelineTab {
-  id: string; // Supabase UUID
+  id: string; 
   user_id: string;
   title: string;
   content: string;
-  tab_order?: number; // Optional for ordering
+  tab_order?: number | null; 
   created_at?: string;
   updated_at?: string;
 }
@@ -52,21 +65,25 @@ export default function NeetGuidelinesPage() {
   const [tabTitleInput, setTabTitleInput] = useState('');
   const [tabContentInput, setTabContentInput] = useState('');
 
-  const fetchTabs = async () => {
-    if (!user) return;
+  const fetchTabs = useCallback(async () => {
+    if (!user) {
+        setTabs([]);
+        setActiveTabId('');
+        setIsLoadingTabs(false);
+        return;
+    }
     setIsLoadingTabs(true);
     try {
       const { data, error } = await supabase
         .from('guideline_tabs')
         .select('*')
         .eq('user_id', user.id)
-        .order('tab_order', { ascending: true, nullsFirst: false }) // Order by tab_order, then by created_at
+        .order('tab_order', { ascending: true, nullsFirst: false }) 
         .order('created_at', { ascending: true });
 
       if (error) throw error;
 
       if (data && data.length === 0) {
-        // If no tabs exist for the user, create the initial default ones
         const defaultTabsToInsert = initialDefaultTabs.map((t, index) => ({
           user_id: user.id,
           title: t.title,
@@ -82,7 +99,7 @@ export default function NeetGuidelinesPage() {
         if (insertedTabs && insertedTabs.length > 0) setActiveTabId(insertedTabs[0].id);
       } else {
         setTabs(data || []);
-        if (data && data.length > 0 && !data.find(t => t.id === activeTabId)) {
+        if (data && data.length > 0 && (!activeTabId || !data.find(t => t.id === activeTabId))) {
           setActiveTabId(data[0].id);
         } else if (data && data.length === 0) {
           setActiveTabId('');
@@ -90,17 +107,17 @@ export default function NeetGuidelinesPage() {
       }
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching Tabs", description: (error as Error).message });
-      logActivity("NEET Guidelines Error", "Failed to fetch tabs", { error: (error as Error).message, userId: user?.id });
+      if (user) logActivity("NEET Guidelines Error", "Failed to fetch tabs", { error: (error as Error).message }, user.id);
     } finally {
       setIsLoadingTabs(false);
     }
-  };
+  }, [user, toast, activeTabId]); // Added activeTabId to dependencies for safety
 
   useEffect(() => {
-    if (user && !authLoading) {
+    if (!authLoading) {
       fetchTabs();
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, fetchTabs]);
 
 
   const handleOpenDialog = (tab?: GuidelineTab) => {
@@ -132,11 +149,11 @@ export default function NeetGuidelinesPage() {
       user_id: user.id,
       title: tabTitleInput,
       content: tabContentInput,
-      tab_order: currentEditingTab.id ? currentEditingTab.tab_order : tabs.length, // Simple ordering
+      tab_order: currentEditingTab.id ? currentEditingTab.tab_order : tabs.length, 
     };
 
     try {
-      if (currentEditingTab.id) { // Editing
+      if (currentEditingTab.id) { 
         const { error } = await supabase
           .from('guideline_tabs')
           .update({ ...tabDataToSave, updated_at: new Date().toISOString() })
@@ -144,8 +161,8 @@ export default function NeetGuidelinesPage() {
           .eq('user_id', user.id);
         if (error) throw error;
         toast({ title: "Tab Updated", description: `"${tabTitleInput}" has been updated.` });
-        logActivity("NEET Guidelines", `Tab updated: "${tabTitleInput}"`, { tabId: currentEditingTab.id, userId: user.id });
-      } else { // Adding
+        logActivity("NEET Guidelines", `Tab updated: "${tabTitleInput}"`, { tabId: currentEditingTab.id }, user.id);
+      } else { 
         const { data, error } = await supabase
           .from('guideline_tabs')
           .insert(tabDataToSave)
@@ -154,13 +171,13 @@ export default function NeetGuidelinesPage() {
         if (error) throw error;
         toast({ title: "Tab Added", description: `New tab "${tabTitleInput}" created.` });
         if(data) setActiveTabId(data.id); 
-        logActivity("NEET Guidelines", `Tab added: "${tabTitleInput}"`, { tabId: data?.id, userId: user.id });
+        logActivity("NEET Guidelines", `Tab added: "${tabTitleInput}"`, { tabId: data?.id }, user.id);
       }
       fetchTabs();
       setIsFormOpen(false);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Saving Tab", description: (error as Error).message });
-      logActivity("NEET Guidelines Error", "Failed to save tab", { error: (error as Error).message, tabTitle: tabTitleInput, userId: user.id });
+      if (user) logActivity("NEET Guidelines Error", "Failed to save tab", { error: (error as Error).message, tabTitle: tabTitleInput }, user.id);
     } finally {
       setIsSubmitting(false);
     }
@@ -184,23 +201,22 @@ export default function NeetGuidelinesPage() {
       if (error) throw error;
       
       toast({ variant: "destructive", title: "Tab Deleted", description: `"${tabToDelete.title}" has been removed.` });
-      logActivity("NEET Guidelines", `Tab deleted: "${tabToDelete.title}"`, { tabId: tabIdToDelete, userId: user.id });
+      if (user) logActivity("NEET Guidelines", `Tab deleted: "${tabToDelete.title}"`, { tabId: tabIdToDelete }, user.id);
       
       const remainingTabs = tabs.filter(t => t.id !== tabIdToDelete);
-      setTabs(remainingTabs); // Optimistic update for UI
+      setTabs(remainingTabs); 
       if (activeTabId === tabIdToDelete && remainingTabs.length > 0) {
         setActiveTabId(remainingTabs[0].id);
       } else if (remainingTabs.length === 0) {
         setActiveTabId('');
       }
-      // fetchTabs(); // Or just update locally if delete is confirmed
     } catch (error) {
        toast({ variant: "destructive", title: "Error Deleting Tab", description: (error as Error).message });
-       logActivity("NEET Guidelines Error", "Failed to delete tab", { error: (error as Error).message, tabId: tabIdToDelete, userId: user.id });
+       if (user) logActivity("NEET Guidelines Error", "Failed to delete tab", { error: (error as Error).message, tabId: tabIdToDelete }, user.id);
     }
   };
 
-  if (authLoading && !user) {
+  if (authLoading) {
     return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
 
@@ -250,19 +266,23 @@ export default function NeetGuidelinesPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Important NEET Info</CardTitle>
-          <CardDescription>Organize and access important NEET tips, reminders, or guidelines in custom tabs. Your notes are saved to your account.</CardDescription>
+          <CardDescription>Organize and access important NEET tips, reminders, or guidelines in custom tabs. Your notes are saved to your Supabase account.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoadingTabs ? (
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
+          ) : !user ? (
+             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center text-center">
+                <p className="text-muted-foreground">Please log in to manage your NEET guidelines.</p>
+            </div>
           ) : tabs.length > 0 ? (
             <Tabs value={activeTabId} onValueChange={setActiveTabId} className="w-full">
               <ScrollArea className="pb-2">
-                <TabsList className="grid w-full grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1 mb-4 h-auto flex-wrap items-stretch">
+                <TabsList className="flex flex-wrap items-stretch h-auto justify-start">
                   {tabs.map(tab => (
-                    <TabsTrigger key={tab.id} value={tab.id} className="relative group data-[state=active]:bg-primary data-[state=active]:text-primary-foreground h-full py-2 px-3">
+                    <TabsTrigger key={tab.id} value={tab.id} className="relative group data-[state=active]:bg-primary data-[state=active]:text-primary-foreground py-2 px-3 m-0.5 flex-grow sm:flex-grow-0">
                       {tab.title}
                     </TabsTrigger>
                   ))}
@@ -277,9 +297,27 @@ export default function NeetGuidelinesPage() {
                         <Button variant="outline" size="sm" onClick={() => handleOpenDialog(tab)}>
                           <Edit2 className="mr-1.5 h-3.5 w-3.5"/> Edit
                         </Button>
-                        <Button variant="destructive" size="sm" onClick={() => handleDeleteTab(tab.id)} disabled={tabs.length <=1}>
-                          <Trash2 className="mr-1.5 h-3.5 w-3.5"/> Delete
-                        </Button>
+                        <AlertDialog>
+                            <AlertDialogTriggerPrimitive asChild>
+                                <Button variant="destructive" size="sm" disabled={tabs.length <=1}>
+                                    <Trash2 className="mr-1.5 h-3.5 w-3.5"/> Delete
+                                </Button>
+                            </AlertDialogTriggerPrimitive>
+                            <AlertDialogContentPrimitive>
+                                <AlertDialogHeaderPrimitive>
+                                <AlertDialogTitlePrimitive>Are you absolutely sure?</AlertDialogTitlePrimitive>
+                                <AlertDialogDescriptionPrimitive>
+                                    This action cannot be undone. This will permanently delete this tab and its content.
+                                </AlertDialogDescriptionPrimitive>
+                                </AlertDialogHeaderPrimitive>
+                                <AlertDialogFooterPrimitive>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteTab(tab.id)} className="bg-destructive hover:bg-destructive/90">
+                                    Delete
+                                </AlertDialogAction>
+                                </AlertDialogFooterPrimitive>
+                            </AlertDialogContentPrimitive>
+                        </AlertDialog>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-2 min-h-[200px] whitespace-pre-wrap text-sm leading-relaxed">
@@ -300,4 +338,3 @@ export default function NeetGuidelinesPage() {
     </div>
   );
 }
-    

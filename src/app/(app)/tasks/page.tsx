@@ -1,6 +1,6 @@
 
 "use client";
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { BellRing, PlusCircle, Edit2, Trash2, AlarmClockCheck, AlarmClockOff, CalendarIcon as CalendarIconLucide, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,12 +27,12 @@ import { cn } from '@/lib/utils';
 import { logActivity } from '@/lib/activity-logger';
 
 interface Reminder {
-  id: string; // UUID from Supabase
+  id: string; 
   user_id: string;
   title: string;
-  reminder_date: string; // ISO string for date (YYYY-MM-DD)
-  reminder_time: string; // HH:MM
-  recurring_days: string[] | null; // Array of day strings e.g. ['Mon', 'Wed'] or null
+  reminder_date: string; 
+  reminder_time: string; 
+  recurring_days?: string[] | null; 
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
@@ -55,8 +55,12 @@ export default function TaskRemindersPage() {
   const [selectedRecurringDays, setSelectedRecurringDays] = useState<string[]>([]);
   const [reminderIsActive, setReminderIsActive] = useState(true);
 
-  const fetchReminders = async () => {
-    if (!user) return;
+  const fetchReminders = useCallback(async () => {
+    if (!user) {
+        setReminders([]);
+        setIsLoadingReminders(false);
+        return;
+    }
     setIsLoadingReminders(true);
     try {
       const { data, error } = await supabase
@@ -70,17 +74,17 @@ export default function TaskRemindersPage() {
       setReminders(data || []);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching Reminders", description: (error as Error).message });
-      logActivity("Task Reminders Error", "Failed to fetch reminders", { error: (error as Error).message }, user?.id);
+      if (user) logActivity("Task Reminders Error", "Failed to fetch reminders", { error: (error as Error).message }, user.id);
     } finally {
       setIsLoadingReminders(false);
     }
-  };
+  }, [user, toast]);
 
   useEffect(() => {
-    if (user && !authLoading) {
+    if (!authLoading) {
       fetchReminders();
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, fetchReminders]);
 
   const handleOpenDialog = (reminder?: Reminder) => {
     if (reminder) {
@@ -138,7 +142,7 @@ export default function TaskRemindersPage() {
     };
 
     try {
-      if (currentEditingReminder.id) { // Editing
+      if (currentEditingReminder.id) { 
         const { error } = await supabase
           .from('task_reminders')
           .update({ ...reminderDataToSave, updated_at: new Date().toISOString() })
@@ -147,7 +151,7 @@ export default function TaskRemindersPage() {
         if (error) throw error;
         toast({ title: "Reminder Updated", description: `"${reminderTitle}" has been updated.` });
         logActivity("Task Reminders", `Reminder updated: "${reminderTitle}"`, { reminderId: currentEditingReminder.id }, user.id);
-      } else { // Adding
+      } else { 
         const {data, error} = await supabase
           .from('task_reminders')
           .insert(reminderDataToSave)
@@ -155,13 +159,13 @@ export default function TaskRemindersPage() {
           .single();
         if (error) throw error;
         toast({ title: "Reminder Added", description: `"${reminderTitle}" has been set.` });
-        logActivity("Task Reminders", `Reminder added: "${reminderTitle}"`, { reminderId: data?.id }, user.id);
+        if(data) logActivity("Task Reminders", `Reminder added: "${reminderTitle}"`, { reminderId: data.id }, user.id);
       }
       fetchReminders();
       setIsFormOpen(false);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Saving Reminder", description: (error as Error).message });
-      logActivity("Task Reminders Error", "Failed to save reminder", { error: (error as Error).message, reminderTitle }, user.id);
+      if (user) logActivity("Task Reminders Error", "Failed to save reminder", { error: (error as Error).message, reminderTitle }, user.id);
     } finally {
       setIsSubmitting(false);
     }
@@ -180,17 +184,17 @@ export default function TaskRemindersPage() {
         .eq('id', reminderId)
         .eq('user_id', user.id);
       if (error) {
-        fetchReminders(); // Revert on error
+        fetchReminders(); 
         throw error;
       }
       const reminder = reminders.find(r => r.id === reminderId);
-      if(reminder) {
+      if(reminder && user) {
         toast({ title: `Reminder ${!currentStatus ? 'Activated' : 'Deactivated'}`, description: `"${reminder.title}" is now ${!currentStatus ? 'active' : 'inactive'}.`});
         logActivity("Task Reminders", `Reminder "${reminder.title}" ${!currentStatus ? 'activated' : 'deactivated'}`, { reminderId }, user.id);
       }
     } catch (error) {
       toast({ variant: "destructive", title: "Error Updating Reminder", description: (error as Error).message });
-      logActivity("Task Reminders Error", "Failed to toggle reminder active state", { error: (error as Error).message, reminderId }, user.id);
+      if (user) logActivity("Task Reminders Error", "Failed to toggle reminder active state", { error: (error as Error).message, reminderId }, user.id);
     }
   };
 
@@ -199,7 +203,7 @@ export default function TaskRemindersPage() {
     const reminderToDelete = reminders.find(r => r.id === reminderId);
     if(!reminderToDelete) return;
 
-    setReminders(reminders.filter(r => r.id !== reminderId)); // Optimistic delete
+    setReminders(reminders.filter(r => r.id !== reminderId)); 
 
     try {
       const { error } = await supabase
@@ -208,18 +212,18 @@ export default function TaskRemindersPage() {
         .eq('id', reminderId)
         .eq('user_id', user.id);
       if (error) {
-        fetchReminders(); // Revert
+        fetchReminders(); 
         throw error;
       }
       toast({ variant: "destructive", title: "Reminder Deleted", description: `"${reminderToDelete.title}" removed.` });
-      logActivity("Task Reminders", `Reminder deleted: "${reminderToDelete.title}"`, { reminderId }, user.id);
+      if(user) logActivity("Task Reminders", `Reminder deleted: "${reminderToDelete.title}"`, { reminderId }, user.id);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Deleting Reminder", description: (error as Error).message });
-      logActivity("Task Reminders Error", "Failed to delete reminder", { error: (error as Error).message, reminderId }, user.id);
+      if(user) logActivity("Task Reminders Error", "Failed to delete reminder", { error: (error as Error).message, reminderId }, user.id);
     }
   };
 
-  if (authLoading || (isLoadingReminders && !reminders.length && !user)) {
+  if (authLoading) {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -308,16 +312,20 @@ export default function TaskRemindersPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Reminders</CardTitle>
-          <CardDescription>Manage your study task reminders. Data saved to your account. Visual reminders only.</CardDescription>
+          <CardDescription>Manage your study task reminders. Data saved to your Supabase account. Visual reminders only.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoadingReminders ? (
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
+          ) : !user ? (
+            <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+                 <p className="text-muted-foreground">Please log in to manage your task reminders.</p>
+            </div>
           ) : reminders.length > 0 ? (
              <ul className="space-y-3">
-              {reminders.map(reminder => ( // Already sorted by fetch from Supabase
+              {reminders.map(reminder => ( 
                 <li key={reminder.id} className={`flex items-center justify-between p-3 border rounded-lg hover:shadow-sm transition-shadow ${reminder.is_active ? 'bg-card/80' : 'bg-muted/50 opacity-70'}`}>
                   <div className="flex items-center space-x-3">
                      {reminder.is_active ? <AlarmClockCheck className="h-5 w-5 text-green-500 flex-shrink-0" /> : <AlarmClockOff className="h-5 w-5 text-muted-foreground flex-shrink-0" />}
@@ -349,4 +357,3 @@ export default function TaskRemindersPage() {
     </div>
   );
 }
-    

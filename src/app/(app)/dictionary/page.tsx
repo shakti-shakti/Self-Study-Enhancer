@@ -5,20 +5,31 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SpellCheck, BookText, Search, History, Trash2, Loader2 } from "lucide-react";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { defineWord, type DefineWordInput, type DefineWordOutput } from '@/ai/flows/define-word';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { logActivity } from "@/lib/activity-logger";
 import { useAuth } from "@/hooks/use-auth";
 import { supabase } from "@/lib/supabaseClient";
+import { useToast } from '@/hooks/use-toast'; // Import useToast
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"; // Import AlertDialog components
 
 interface SearchHistoryItem {
-  id: string; // Supabase UUID
+  id: string; 
   user_id: string;
   word: string;
   definition: string;
-  timestamp: string; // timestamptz
+  timestamp: string; 
 }
 
 export default function DictionaryPage() {
@@ -29,9 +40,14 @@ export default function DictionaryPage() {
   const [isFetchingHistory, setIsFetchingHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const { toast } = useToast();
 
-  const fetchHistory = async () => {
-    if (!user) return;
+  const fetchHistory = useCallback(async () => {
+    if (!user) {
+        setSearchHistory([]);
+        setIsFetchingHistory(false);
+        return;
+    }
     setIsFetchingHistory(true);
     try {
       const { data, error } = await supabase
@@ -44,17 +60,16 @@ export default function DictionaryPage() {
       setSearchHistory(data || []);
     } catch (err) {
       console.error("Error fetching dictionary history:", err);
-      // Don't toast here, as it might be too noisy on page load
     } finally {
       setIsFetchingHistory(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
-    if (user && !authLoading) {
+    if (!authLoading) {
       fetchHistory();
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, fetchHistory]);
 
   const handleDefineWord = async () => {
     if (!word.trim()) {
@@ -68,13 +83,12 @@ export default function DictionaryPage() {
     setIsLoading(true);
     setError(null);
     setDefinition(null);
-    logActivity("Dictionary", `User searched for word: "${word}"`, {userId: user.id});
+    logActivity("Dictionary", `User searched for word: "${word}"`, { word }, user.id);
     try {
       const input: DefineWordInput = { word };
       const result: DefineWordOutput = await defineWord(input);
       setDefinition(result.definition);
       
-      // Add to history in Supabase
       const newHistoryItem = {
         user_id: user.id,
         word: word,
@@ -89,12 +103,12 @@ export default function DictionaryPage() {
       if (saveError) throw saveError;
       if (savedItem) setSearchHistory(prev => [savedItem, ...prev].slice(0, 20));
       
-      logActivity("Dictionary Success", `Definition found for: "${word}"`, {userId: user.id});
+      logActivity("Dictionary Success", `Definition found for: "${word}"`, { word }, user.id);
 
     } catch (err) {
       console.error("Error defining word or saving history:", err);
       setError("Failed to get definition or save to history. Please try again.");
-      logActivity("Dictionary Error", `Failed to define/save word: "${word}"`, { error: (err as Error).message, userId: user.id });
+      if(user) logActivity("Dictionary Error", `Failed to define/save word: "${word}"`, { error: (err as Error).message, word }, user.id);
     } finally {
       setIsLoading(false);
     }
@@ -110,7 +124,7 @@ export default function DictionaryPage() {
       if (error) throw error;
       setSearchHistory([]);
       toast({ title: "History Cleared", description: "Your dictionary search history has been cleared."});
-      logActivity("Dictionary", "Search history cleared.", {userId: user.id});
+      logActivity("Dictionary", "Search history cleared.", undefined, user.id);
     } catch (err) {
       toast({ variant: "destructive", title: "Error Clearing History", description: (err as Error).message });
     }
@@ -120,12 +134,10 @@ export default function DictionaryPage() {
     setWord(item.word);
     setDefinition(item.definition);
     setError(null);
-    setIsLoading(false); // Stop loading if user clicks history while a search is in progress
+    setIsLoading(false); 
   };
 
-  const { toast } = useToast(); // Moved toast hook here
-
-  if (authLoading && !user) {
+  if (authLoading) {
     return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
 
@@ -139,7 +151,7 @@ export default function DictionaryPage() {
         <Card className="md:col-span-2">
           <CardHeader>
             <CardTitle>Define a Word</CardTitle>
-            <CardDescription>Enter a word to get its AI-powered definition. Your searches are saved.</CardDescription>
+            <CardDescription>Enter a word to get its AI-powered definition. Your searches are saved to your Supabase account.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center space-x-2">
@@ -191,18 +203,38 @@ export default function DictionaryPage() {
             <CardHeader>
                 <div className="flex justify-between items-center">
                     <CardTitle className="flex items-center"><History className="mr-2 h-5 w-5"/>Search History</CardTitle>
-                    {searchHistory.length > 0 && (
-                        <Button variant="ghost" size="icon" onClick={handleClearHistory} title="Clear history" disabled={!user}>
-                            <Trash2 className="h-4 w-4 text-destructive"/>
-                        </Button>
+                    {searchHistory.length > 0 && user && (
+                         <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                               <Button variant="ghost" size="icon" title="Clear history">
+                                    <Trash2 className="h-4 w-4 text-destructive"/>
+                                </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        This will permanently delete your dictionary search history.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction onClick={handleClearHistory} className="bg-destructive hover:bg-destructive/90">
+                                        Clear History
+                                    </AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
                     )}
                 </div>
-                <CardDescription>Your recent word searches from this account.</CardDescription>
+                <CardDescription>Your recent word searches.</CardDescription>
             </CardHeader>
             <CardContent>
                 {isFetchingHistory ? (
                     <div className="flex justify-center items-center p-4"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
-                ) : searchHistory.length > 0 ? (
+                ) : !user ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">Log in to see your search history.</p>
+                ): searchHistory.length > 0 ? (
                     <ScrollArea className="h-[300px]">
                         <ul className="space-y-2">
                             {searchHistory.map(item => (
@@ -228,4 +260,3 @@ export default function DictionaryPage() {
     </div>
   );
 }
-    
