@@ -26,34 +26,47 @@ export async function logActivity(
   type: string,
   description: string,
   details?: Record<string, any>,
-  userId?: string | null // Explicitly pass userId from the calling context
+  passedUserId?: string | null // Explicitly pass userId from the calling context
 ): Promise<void> {
-  if (typeof window === 'undefined') return; // Don't run on server for now
+  if (typeof window === 'undefined') return;
 
-  // If userId is explicitly undefined (meaning it wasn't passed), treat it as null.
-  // If userId is passed as null, it remains null.
-  // If userId is a valid string, use it.
-  const effectiveUserId = userId === undefined ? null : userId;
+  let userIdToLog = passedUserId === undefined ? null : passedUserId;
+
+  // If no userId was passed (or explicitly null) AND we want to ensure authenticated users' logs are tied to them
+  // to satisfy RLS `auth.uid() = user_id`, try to get current session user ID.
+  if (userIdToLog === null) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        userIdToLog = session.user.id;
+        // Optional: Log a warning if we had to auto-fill this, indicating a potential issue at the call site.
+        // console.warn(`logActivity: 'userId' was not provided for an authenticated session. Using current user ID: ${userIdToLog}. Type: "${type}"`);
+      }
+    } catch (sessionError) {
+      console.error("Error fetching session in logActivity:", sessionError);
+      // Proceed with userIdToLog as null if session fetch fails
+    }
+  }
 
   const newLog: ActivityLogInsert = {
-    user_id: effectiveUserId, // user_id will now always be part of the payload, possibly as null
+    user_id: userIdToLog,
     type,
     description,
     details,
   };
 
   try {
-    // The RLS policy WITH CHECK (auth.uid() = user_id) will ensure that
-    // if the user is authenticated, newLog.user_id must match auth.uid().
-    // If newLog.user_id is null (because effectiveUserId was null), 
-    // the insert will (and should) fail for an authenticated user due to RLS.
     const { error } = await supabase.from('activity_logs').insert(newLog);
     if (error) {
-      console.error("Error logging activity to Supabase:", error.message, error.details);
-      // Fallback or further error handling
+      console.error(
+        "Error logging activity to Supabase:", 
+        error.message, 
+        error.details,
+        "Attempted payload:", newLog
+      );
     }
   } catch (e) {
-    console.error("Exception during Supabase activity logging:", e);
+    console.error("Exception during Supabase activity logging:", e, "Attempted payload:", newLog);
   }
 }
 
@@ -86,7 +99,7 @@ export async function deleteActivityLogEntry(logId: string, userId: string): Pro
             .from('activity_logs')
             .delete()
             .eq('id', logId)
-            .eq('user_id', userId); // Ensure user can only delete their own logs based on RLS
+            .eq('user_id', userId); 
         
         if (error) {
             console.error("Error deleting activity log entry:", error);
