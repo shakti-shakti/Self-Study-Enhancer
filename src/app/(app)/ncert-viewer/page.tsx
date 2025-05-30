@@ -1,6 +1,6 @@
 
 "use client";
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react'; // Added useCallback
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -26,89 +26,106 @@ interface Book {
   fullBookDownloadUrl?: string; 
 }
 
+// Expanded Mock Data
 const ncertBooksData: Book[] = [
+  // Class 11 Physics
   {
     id: 'phy11_p1', name: 'Physics Part I - Class 11', classYear: '11', subject: 'Physics', chapters: [
       { id: 'phy11_p1_ch1', name: 'Chapter 1: Physical World', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph101.pdf' },
       { id: 'phy11_p1_ch2', name: 'Chapter 2: Units and Measurement', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph102.pdf' },
       { id: 'phy11_p1_ch3', name: 'Chapter 3: Motion in a Straight Line', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph103.pdf' },
       { id: 'phy11_p1_ch4', name: 'Chapter 4: Motion in a Plane', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph104.pdf' },
-      { id: 'phy11_p1_ch5', name: 'Chapter 5: Laws of Motion' }, // Example without direct PDF link
-      { id: 'phy11_p1_ch6', name: 'Chapter 6: Work, Energy and Power' },
-      { id: 'phy11_p1_ch7', name: 'Chapter 7: System of Particles and Rotational Motion' },
-      { id: 'phy11_p1_ch8', name: 'Chapter 8: Gravitation' },
+      { id: 'phy11_p1_ch5', name: 'Chapter 5: Laws of Motion', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph105.pdf' },
+      { id: 'phy11_p1_ch6', name: 'Chapter 6: Work, Energy and Power', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph106.pdf' },
+      { id: 'phy11_p1_ch7', name: 'Chapter 7: System of Particles and Rotational Motion', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph107.pdf' },
+      { id: 'phy11_p1_ch8', name: 'Chapter 8: Gravitation', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph108.pdf' },
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/keph1ps.zip'
   },
   {
     id: 'phy11_p2', name: 'Physics Part II - Class 11', classYear: '11', subject: 'Physics', chapters: [
-      { id: 'phy11_p2_ch9', name: 'Chapter 9: Mechanical Properties of Solids'},
-      { id: 'phy11_p2_ch10', name: 'Chapter 10: Mechanical Properties of Fluids'},
-      { id: 'phy11_p2_ch11', name: 'Chapter 11: Thermal Properties of Matter'},
-      { id: 'phy11_p2_ch12', name: 'Chapter 12: Thermodynamics'},
-      { id: 'phy11_p2_ch13', name: 'Chapter 13: Kinetic Theory'},
-      { id: 'phy11_p2_ch14', name: 'Chapter 14: Oscillations'},
-      { id: 'phy11_p2_ch15', name: 'Chapter 15: Waves'},
+      { id: 'phy11_p2_ch9', name: 'Chapter 9: Mechanical Properties of Solids', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph201.pdf'},
+      { id: 'phy11_p2_ch10', name: 'Chapter 10: Mechanical Properties of Fluids', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph202.pdf'},
+      { id: 'phy11_p2_ch11', name: 'Chapter 11: Thermal Properties of Matter', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph203.pdf'},
+      { id: 'phy11_p2_ch12', name: 'Chapter 12: Thermodynamics', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph204.pdf'},
+      { id: 'phy11_p2_ch13', name: 'Chapter 13: Kinetic Theory', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph205.pdf'},
+      { id: 'phy11_p2_ch14', name: 'Chapter 14: Oscillations', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph206.pdf'},
+      { id: 'phy11_p2_ch15', name: 'Chapter 15: Waves', pdfUrl: 'https://ncert.nic.in/textbook/pdf/keph207.pdf'},
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/keph2ps.zip'
   },
+  // Class 11 Chemistry
   {
     id: 'chem11_p1', name: 'Chemistry Part I - Class 11', classYear: '11', subject: 'Chemistry', chapters: [
       { id: 'chem11_p1_ch1', name: 'Chapter 1: Some Basic Concepts of Chemistry', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech101.pdf' },
       { id: 'chem11_p1_ch2', name: 'Chapter 2: Structure of Atom', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech102.pdf' },
-      { id: 'chem11_p1_ch3', name: 'Chapter 3: Classification of Elements and Periodicity in Properties' },
-      { id: 'chem11_p1_ch4', name: 'Chapter 4: Chemical Bonding and Molecular Structure' },
+      { id: 'chem11_p1_ch3', name: 'Chapter 3: Classification of Elements and Periodicity in Properties', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech103.pdf' },
+      { id: 'chem11_p1_ch4', name: 'Chapter 4: Chemical Bonding and Molecular Structure', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech104.pdf' },
+      { id: 'chem11_p1_ch5', name: 'Chapter 5: States of Matter', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech105.pdf' },
+      { id: 'chem11_p1_ch6', name: 'Chapter 6: Thermodynamics', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech106.pdf' },
+      { id: 'chem11_p1_ch7', name: 'Chapter 7: Equilibrium', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech107.pdf' },
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/kech1ps.zip'
   },
    {
     id: 'chem11_p2', name: 'Chemistry Part II - Class 11', classYear: '11', subject: 'Chemistry', chapters: [
-      { id: 'chem11_p2_ch8', name: 'Chapter 8: Redox Reactions' },
-      { id: 'chem11_p2_ch9', name: 'Chapter 9: Hydrogen' },
-      { id: 'chem11_p2_ch10', name: 'Chapter 10: The s-Block Elements' },
-      { id: 'chem11_p2_ch11', name: 'Chapter 11: The p-Block Elements' },
+      { id: 'chem11_p2_ch8', name: 'Chapter 8: Redox Reactions', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech201.pdf' },
+      { id: 'chem11_p2_ch9', name: 'Chapter 9: Hydrogen', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech202.pdf' },
+      { id: 'chem11_p2_ch10', name: 'Chapter 10: The s-Block Elements', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech203.pdf' },
+      { id: 'chem11_p2_ch11', name: 'Chapter 11: The p-Block Elements', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech204.pdf' },
+      { id: 'chem11_p2_ch12', name: 'Chapter 12: Organic Chemistry – Some Basic Principles and Techniques', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech205.pdf' },
+      { id: 'chem11_p2_ch13', name: 'Chapter 13: Hydrocarbons', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech206.pdf' },
+      { id: 'chem11_p2_ch14', name: 'Chapter 14: Environmental Chemistry', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kech207.pdf' },
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/kech2ps.zip'
   },
+  // Class 11 Biology
   {
     id: 'bio11', name: 'Biology - Class 11', classYear: '11', subject: 'Biology', chapters: [
       { id: 'bio11_ch1', name: 'Chapter 1: The Living World', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kebo101.pdf' },
       { id: 'bio11_ch2', name: 'Chapter 2: Biological Classification', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kebo102.pdf' },
       { id: 'bio11_ch3', name: 'Chapter 3: Plant Kingdom', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kebo103.pdf' },
-      { id: 'bio11_ch4', name: 'Chapter 4: Animal Kingdom' },
-      { id: 'bio11_ch5', name: 'Chapter 5: Morphology of Flowering Plants' },
+      { id: 'bio11_ch4', name: 'Chapter 4: Animal Kingdom', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kebo104.pdf' },
+      { id: 'bio11_ch5', name: 'Chapter 5: Morphology of Flowering Plants', pdfUrl: 'https://ncert.nic.in/textbook/pdf/kebo105.pdf' },
+      // Add more chapters...
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/kebo1ps.zip'
   },
-   {
+   // Class 12 Physics
+  {
     id: 'phy12_p1', name: 'Physics Part I - Class 12', classYear: '12', subject: 'Physics', chapters: [
       { id: 'phy12_p1_ch1', name: 'Chapter 1: Electric Charges and Fields', pdfUrl: 'https://ncert.nic.in/textbook/pdf/leph101.pdf' },
       { id: 'phy12_p1_ch2', name: 'Chapter 2: Electrostatic Potential and Capacitance', pdfUrl: 'https://ncert.nic.in/textbook/pdf/leph102.pdf' },
-      { id: 'phy12_p1_ch3', name: 'Chapter 3: Current Electricity' },
-      { id: 'phy12_p1_ch4', name: 'Chapter 4: Moving Charges and Magnetism' },
+      { id: 'phy12_p1_ch3', name: 'Chapter 3: Current Electricity', pdfUrl: 'https://ncert.nic.in/textbook/pdf/leph103.pdf' },
+      { id: 'phy12_p1_ch4', name: 'Chapter 4: Moving Charges and Magnetism', pdfUrl: 'https://ncert.nic.in/textbook/pdf/leph104.pdf' },
+      // Add more...
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/leph1ps.zip'
   },
   {
     id: 'phy12_p2', name: 'Physics Part II - Class 12', classYear: '12', subject: 'Physics', chapters: [
-      { id: 'phy12_p2_ch9', name: 'Chapter 9: Ray Optics and Optical Instruments' },
-      { id: 'phy12_p2_ch10', name: 'Chapter 10: Wave Optics' },
+      { id: 'phy12_p2_ch9', name: 'Chapter 9: Ray Optics and Optical Instruments', pdfUrl: 'https://ncert.nic.in/textbook/pdf/leph201.pdf' },
+      { id: 'phy12_p2_ch10', name: 'Chapter 10: Wave Optics', pdfUrl: 'https://ncert.nic.in/textbook/pdf/leph202.pdf' },
+      // Add more...
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/leph2ps.zip'
   },
+  // Class 12 Chemistry
   {
     id: 'chem12_p1', name: 'Chemistry Part I - Class 12', classYear: '12', subject: 'Chemistry', chapters: [
-      { id: 'chem12_p1_ch1', name: 'Chapter 1: The Solid State', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lech101.pdf'  }, 
-      { id: 'chem12_p1_ch2', name: 'Chapter 2: Solutions', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lech102.pdf' },
-      { id: 'chem12_p1_ch3', name: 'Chapter 3: Electrochemistry' },
-      { id: 'chem12_p1_ch4', name: 'Chapter 4: Chemical Kinetics' },
-    ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/lech1ps.zip' 
+      { id: 'chem12_p1_ch1', name: 'Chapter 1: Solutions', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lech101.pdf'  }, // Note: NCERT might have renumbered for new syllabus
+      { id: 'chem12_p1_ch2', name: 'Chapter 2: Electrochemistry', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lech102.pdf' },
+      { id: 'chem12_p1_ch3', name: 'Chapter 3: Chemical Kinetics', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lech103.pdf' },
+      // Add more...
+    ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/lech1ps.zip' // Use the correct combined PDF zip name
   },
   {
     id: 'chem12_p2', name: 'Chemistry Part II - Class 12', classYear: '12', subject: 'Chemistry', chapters: [
-      { id: 'chem12_p2_ch10', name: 'Chapter 10: Haloalkanes and Haloarenes' },
-      { id: 'chem12_p2_ch11', name: 'Chapter 11: Alcohols, Phenols and Ethers' },
-    ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/lech2ps.zip'
+      { id: 'chem12_p2_ch5', name: 'Chapter 5: d-and f-Block Elements' }, // Example of chapters from Part 2
+      { id: 'chem12_p2_ch6', name: 'Chapter 6: Coordination Compounds' },
+      // Add more...
+    ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/lech2ps.zip' // Placeholder, find correct NCERT link
   },
+   // Class 12 Biology
    {
     id: 'bio12', name: 'Biology - Class 12', classYear: '12', subject: 'Biology', chapters: [
-      { id: 'bio12_ch1', name: 'Chapter 1: Reproduction in Organisms', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lebo101.pdf' },
-      { id: 'bio12_ch2', name: 'Chapter 2: Sexual Reproduction in Flowering Plants', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lebo102.pdf' },
-      { id: 'bio12_ch3', name: 'Chapter 3: Human Reproduction' },
-      { id: 'bio12_ch4', name: 'Chapter 4: Reproductive Health' },
+      { id: 'bio12_ch1', name: 'Chapter 1: Sexual Reproduction in Flowering Plants', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lebo101.pdf' }, // NCERT syllabus changes, adjust as needed
+      { id: 'bio12_ch2', name: 'Chapter 2: Human Reproduction', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lebo102.pdf' },
+      { id: 'bio12_ch3', name: 'Chapter 3: Reproductive Health', pdfUrl: 'https://ncert.nic.in/textbook/pdf/lebo103.pdf' },
+      // Add more...
     ], fullBookDownloadUrl: 'https://ncert.nic.in/textbook/pdf/lebo1ps.zip'
   },
 ];
@@ -117,11 +134,12 @@ const ncertBooksData: Book[] = [
 export default function NcertViewerPage() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const iframeRef = useRef<HTMLIFrameElement>(null); // Defined iframeRef
   const [selectedBookId, setSelectedBookId] = useState<string | undefined>(ncertBooksData[0]?.id);
-  const [selectedChapterId, setSelectedChapterId] = useState<string | undefined>(ncertBooksData[0]?.chapters[0]?.id);
-  const [currentPdfUrl, setCurrentPdfUrl] = useState<string | undefined>(ncertBooksData[0]?.chapters[0]?.pdfUrl);
+  const [selectedChapterId, setSelectedChapterId] = useState<string | undefined>(undefined); // Start with no chapter selected
+  const [currentPdfUrl, setCurrentPdfUrl] = useState<string | undefined>(undefined);
   const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
-  const [iframeKey, setIframeKey] = useState(Date.now()); // To force iframe re-render
+  const [iframeKey, setIframeKey] = useState(Date.now()); 
 
   const selectedBook = ncertBooksData.find(book => book.id === selectedBookId);
   const selectedChapter = selectedBook?.chapters.find(chap => chap.id === selectedChapterId);
@@ -129,30 +147,25 @@ export default function NcertViewerPage() {
   useEffect(() => {
     const newBook = ncertBooksData.find(b => b.id === selectedBookId);
     if (newBook && newBook.chapters.length > 0) {
-      const firstChapter = newBook.chapters[0];
-      setSelectedChapterId(firstChapter.id);
-      setCurrentPdfUrl(firstChapter.pdfUrl);
-      setPdfLoadFailed(false);
-      setIframeKey(Date.now()); // Force iframe reload
+      // Don't auto-select first chapter; let user choose
+      setSelectedChapterId(undefined); 
+      setCurrentPdfUrl(undefined);
     } else if (newBook && newBook.chapters.length === 0) {
       setSelectedChapterId(undefined);
       setCurrentPdfUrl(undefined);
-      setPdfLoadFailed(false);
-      setIframeKey(Date.now());
-    } else { // If selectedBookId is somehow invalid or no book found
-      setSelectedChapterId(undefined);
-      setCurrentPdfUrl(undefined);
-      setPdfLoadFailed(false);
-      setIframeKey(Date.now());
     }
+    setPdfLoadFailed(false);
+    setIframeKey(Date.now()); 
   }, [selectedBookId]);
 
 
   const handleBookChange = (bookId: string) => {
     setSelectedBookId(bookId);
-    // The useEffect above will handle updating chapter and PDF URL
+    // Chapter and PDF URL will be reset by the useEffect above, user needs to pick a chapter.
     const newBook = ncertBooksData.find(b => b.id === bookId);
-    if (user && newBook) logActivity("NCERT Viewer", `Selected book: ${newBook.name}`, { bookId: newBook.id }, user.id);
+    if (user && newBook && newBook.id !== selectedBookId) { // Log only if book actually changes
+      logActivity("NCERT Viewer", `Selected book: ${newBook.name}`, { bookId: newBook.id }, user.id);
+    }
   };
 
   const handleChapterChange = (chapterId: string) => {
@@ -160,8 +173,10 @@ export default function NcertViewerPage() {
     const chapter = selectedBook?.chapters.find(chap => chap.id === chapterId);
     setCurrentPdfUrl(chapter?.pdfUrl);
     setPdfLoadFailed(false);
-    setIframeKey(Date.now()); // Force iframe reload
-    if (user && chapter && selectedBook) logActivity("NCERT Viewer", `Selected chapter: ${chapter.name} from ${selectedBook.name}`, { chapterId: chapter.id, bookId: selectedBook.id }, user.id);
+    setIframeKey(Date.now()); 
+    if (user && chapter && selectedBook) {
+      logActivity("NCERT Viewer", `Selected chapter: ${chapter.name} from ${selectedBook.name}`, { chapterId: chapter.id, bookId: selectedBook.id }, user.id);
+    }
   };
   
   const handleIframeError = (event: React.SyntheticEvent<HTMLIFrameElement, Event>) => {
@@ -175,18 +190,19 @@ export default function NcertViewerPage() {
     }
   };
   
-  const handleExternalOpenOrDownload = (url?: string, type: 'chapter' | 'full' = 'full', bookName?: string, chapterName?: string) => {
+  const handleExternalOpenOrDownload = useCallback((url?: string, type: 'chapter' | 'full' = 'full', bookName?: string, chapterName?: string) => {
     if (url) {
-      window.open(url, '_blank');
+      window.open(url, '_blank', 'noopener,noreferrer');
       if (user) logActivity("NCERT Viewer Action", `Opened ${type} externally: ${bookName || selectedBook?.name} ${type === 'chapter' ? (chapterName || selectedChapter?.name) : ''}`, { url }, user.id);
     } else {
       toast({
         variant: "destructive",
         title: "Link Not Available",
-        description: `No direct link found for this ${type === 'chapter' ? 'chapter' : 'book'} in the demo data.`,
+        description: `No direct link found for this ${type === 'chapter' ? 'chapter' : 'book'} in the demo data. Try searching on the NCERT website.`,
       });
     }
-  };
+  }, [user, toast, selectedBook, selectedChapter]);
+
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -199,7 +215,7 @@ export default function NcertViewerPage() {
         <FileText className="h-4 w-4 text-blue-600 dark:text-blue-400" />
         <AlertTitle className="text-blue-700 dark:text-blue-300">PDF Viewing & Annotation</AlertTitle>
         <AlertDescription className="text-blue-600/90 dark:text-blue-400/90">
-          This viewer attempts to embed NCERT PDFs for in-app viewing. For annotations (highlighting, notes), please use the "Open Externally" button to view/download the PDF and use an external PDF editor. Some PDFs may not embed due to security restrictions; use "Open PDF Externally" in such cases. The book data uses publicly available NCERT PDF links. Full book downloads are ZIP files from NCERT.
+          This viewer attempts to embed NCERT PDFs for in-app viewing from official NCERT links. For annotations (highlighting, notes), please use the "Open PDF Externally" button to view/download the PDF and use an external PDF editor. Some PDFs may not embed due to security restrictions; use "Open PDF Externally" in such cases. Full book downloads are ZIP files from NCERT.
         </AlertDescription>
       </Alert>
 
@@ -223,7 +239,7 @@ export default function NcertViewerPage() {
             </div>
             <div>
               <label htmlFor="chapter-select" className="block text-sm font-medium mb-1">Select Chapter</label>
-              <Select value={selectedChapterId} onValueChange={handleChapterChange} disabled={!selectedBook || selectedBook.chapters.length === 0}>
+              <Select value={selectedChapterId || ""} onValueChange={handleChapterChange} disabled={!selectedBook || selectedBook.chapters.length === 0}>
                 <SelectTrigger id="chapter-select"> <SelectValue placeholder={!selectedBook ? "Select a book first" : (selectedBook.chapters.length === 0 ? "No chapters in this book" : "Choose a chapter")} /> </SelectTrigger>
                 <SelectContent className="max-h-[200px] overflow-y-auto">
                   {selectedBook?.chapters.map(chapter => (
@@ -236,9 +252,9 @@ export default function NcertViewerPage() {
 
           <div className="flex items-center justify-between gap-2 flex-wrap bg-muted p-2 rounded-md">
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => toast({ title: "Zoom In (Feature Not Implemented)", description: "Use browser zoom or external PDF viewer for zooming."})}><ZoomIn className="mr-1 h-4 w-4"/>Zoom In</Button>
-              <Button variant="outline" size="sm" onClick={() => toast({ title: "Zoom Out (Feature Not Implemented)", description: "Use browser zoom or external PDF viewer for zooming."})}><ZoomOut className="mr-1 h-4 w-4"/>Zoom Out</Button>
-              <Button variant="outline" size="sm" onClick={() => toast({ title: "Fit to Page (Feature Not Implemented)", description: "PDF viewer default behavior."})}><ArrowLeftRight className="mr-1 h-4 w-4"/>Fit Page</Button>
+              <Button variant="outline" size="sm" onClick={() => toast({ title: "Zoom In (Mock)", description: "Use browser zoom or external PDF viewer for zooming."})}><ZoomIn className="mr-1 h-4 w-4"/>Zoom In</Button>
+              <Button variant="outline" size="sm" onClick={() => toast({ title: "Zoom Out (Mock)", description: "Use browser zoom or external PDF viewer for zooming."})}><ZoomOut className="mr-1 h-4 w-4"/>Zoom Out</Button>
+              <Button variant="outline" size="sm" onClick={() => toast({ title: "Fit to Page (Mock)", description: "PDF viewer default behavior."})}><ArrowLeftRight className="mr-1 h-4 w-4"/>Fit Page</Button>
             </div>
             {currentPdfUrl && selectedChapter && (
                 <Button variant="outline" size="sm" onClick={() => handleExternalOpenOrDownload(currentPdfUrl, 'chapter', selectedBook?.name, selectedChapter?.name)}>
@@ -276,7 +292,7 @@ export default function NcertViewerPage() {
               <div className="text-center p-8">
                 <BookOpen className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
                 <p className="text-muted-foreground">
-                  {selectedChapter ? (currentPdfUrl ? `Loading "${selectedChapter.name}"...` : `No direct PDF link available for "${selectedChapter.name}" in the demo data. Try "Open Externally".`) : "Select a book and chapter to view."}
+                  {selectedChapter ? (currentPdfUrl ? `Loading "${selectedChapter.name}"...` : `No direct PDF link available for "${selectedChapter.name}" in the demo data. Try "Open Externally".`) : "Select a book and then a chapter to view."}
                 </p>
                  {!currentPdfUrl && selectedChapter && (
                      <Button 
@@ -286,6 +302,9 @@ export default function NcertViewerPage() {
                     >
                         Try finding chapter on NCERT website
                     </Button>
+                 )}
+                 {!selectedChapter && selectedBook && selectedBook.chapters.length > 0 && (
+                    <p className="text-muted-foreground mt-2">Please select a chapter from the dropdown above.</p>
                  )}
               </div>
             )}
