@@ -1,3 +1,4 @@
+
 "use client";
 
 import type { ReactNode } from 'react';
@@ -37,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const fetchUserProfile = useCallback(async (sbUser: SupabaseUserType): Promise<AppUser | null> => {
     if (!sbUser) return null;
     try {
-      logActivity("Profile Fetch", `Fetching profile for user: ${sbUser.id}`);
+      // logActivity("Profile Fetch", `Fetching profile for user: ${sbUser.id}`, undefined, sbUser.id);
       const { data: profile, error } = await supabase
         .from('profiles')
         .select('*')
@@ -46,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (error && error.code !== 'PGRST116') { // PGRST116: single row not found
         console.error('Error fetching profile:', error.message || error);
-        logActivity("Supabase Error", "Error fetching user profile", { userId: sbUser.id, error_message: error.message, error_details: error.details });
+        logActivity("Supabase Error", "Error fetching user profile", { userId: sbUser.id, error_message: error.message, error_details: error.details }, sbUser.id);
         return { 
           id: sbUser.id,
           email: sbUser.email || null,
@@ -55,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
       }
       if (profile) {
-         logActivity("Profile Success", `Profile successfully fetched for user: ${sbUser.id}`, {name: profile.name});
+        // logActivity("Profile Success", `Profile successfully fetched for user: ${sbUser.id}`, {name: profile.name}, sbUser.id);
         return {
           id: sbUser.id,
           email: sbUser.email || profile.email, 
@@ -65,7 +66,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           target_year: profile.target_year,
         };
       }
-      logActivity("Profile Info", "No profile found for user in 'profiles' table, might be new signup or data mismatch.", { userId: sbUser.id });
+      // logActivity("Profile Info", "No profile found for user in 'profiles' table, might be new signup or data mismatch.", { userId: sbUser.id }, sbUser.id);
+      // If no profile row, create a basic AppUser from SupabaseUser
       return { 
         id: sbUser.id,
         email: sbUser.email || null,
@@ -74,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
     } catch (e) {
       console.error('Exception in fetchUserProfile:', (e as Error).message || e);
-      logActivity("Supabase Exception", "Exception fetching user profile", { userId: sbUser.id, error: (e as Error).message });
+      logActivity("Supabase Exception", "Exception fetching user profile", { userId: sbUser.id, error: (e as Error).message }, sbUser.id);
        return { 
         id: sbUser.id,
         email: sbUser.email || null,
@@ -92,11 +94,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSupabaseUser(session.user);
         const profile = await fetchUserProfile(session.user);
         setAppUser(profile);
-        if (profile && profile.name) {
-           logActivity("Auth", "User session restored and profile loaded.", { uid: session.user.id, name: profile.name });
-        } else {
-           logActivity("Auth Warning", "User session restored, basic profile data set. Full profile might be pending or missing.", { uid: session.user.id });
-        }
+        // Log activity for session restoration only if user data makes sense
+        // if (profile && profile.name) {
+        //    logActivity("Auth", "User session restored and profile loaded.", { uid: session.user.id, name: profile.name }, session.user.id);
+        // } else {
+        //    logActivity("Auth Warning", "User session restored, basic profile data set. Full profile might be pending or missing.", { uid: session.user.id }, session.user.id);
+        // }
       }
       setIsLoading(false);
     });
@@ -112,21 +115,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setAppUser(profile);
 
           if (event === 'SIGNED_IN') {
-            logActivity("Auth", "User signed in.", { uid: currentSupabaseUser.id, email: currentSupabaseUser.email });
+            logActivity("Auth", "User signed in.", { uid: currentSupabaseUser.id, email: currentSupabaseUser.email }, currentSupabaseUser.id);
           } else if (event === 'USER_UPDATED' && profile) {
-            logActivity("Auth", "User data updated.", { uid: currentSupabaseUser.id, name: profile.name });
+            logActivity("Auth", "User data updated.", { uid: currentSupabaseUser.id, name: profile.name }, currentSupabaseUser.id);
           } else if (event === 'TOKEN_REFRESHED') {
-            logActivity("Auth", "Token refreshed.", { uid: currentSupabaseUser.id});
+            // logActivity("Auth", "Token refreshed.", { uid: currentSupabaseUser.id}, currentSupabaseUser.id);
           }
         } else {
           setAppUser(null);
           if (event === 'SIGNED_OUT') {
-            logActivity("Auth", "User signed out.");
+            logActivity("Auth", "User signed out.", undefined, undefined); // No user ID on sign out for log
           }
         }
         setIsLoading(false);
       }
     );
+    
+    if (error) {
+      console.error("Error with onAuthStateChange subscription:", error);
+      logActivity("Auth Error", "Failed to subscribe to onAuthStateChange", { error_message: error.message });
+    }
+
 
     return () => {
       data?.subscription?.unsubscribe();
@@ -138,9 +147,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      logActivity("Auth", "Login attempt successful (Supabase).", { email });
+      // logActivity("Auth", "Login attempt successful (Supabase).", { email }, undefined); // User not yet set
     } catch (error) {
-      logActivity("Auth Error", "Login attempt failed (Supabase).", { email, error_message: (error as Error).message });
+      logActivity("Auth Error", "Login attempt failed (Supabase).", { email, error_message: (error as Error).message }, undefined);
       throw error; 
     } finally {
       setIsLoading(false); 
@@ -157,7 +166,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           data: { 
             name: name,
             avatar_url: `https://placehold.co/100x100.png?text=${name ? name.charAt(0).toUpperCase() : 'U'}`
-          }
+          },
+          // Redirect to login page after email confirmation
+          emailRedirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined,
         }
       });
 
@@ -166,16 +177,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       if (!authData.user.id || !authData.user.email) {
         console.error("Critical error: User ID or Email missing after signup from Supabase Auth.", authData.user);
-        logActivity("Auth Critical Error", "User ID or Email missing after signup from Supabase Auth.", { user: authData.user });
+        logActivity("Auth Critical Error", "User ID or Email missing after signup from Supabase Auth.", { user: JSON.stringify(authData.user) }, undefined);
         throw new Error("User ID or Email missing after signup, cannot create profile.");
       }
 
-      const classToSave = userClassProp === "none" ? null : userClassProp;
-      const yearToSave = targetYearProp === "none" ? null : targetYearProp;
+      const classToSave = (!userClassProp || userClassProp === "none") ? null : userClassProp;
+      const yearToSave = (!targetYearProp || targetYearProp === "none") ? null : targetYearProp;
 
       const profilePayload = {
         id: authData.user.id,
-        email: authData.user.email,
+        email: authData.user.email, 
         name: name,
         avatar_url: authData.user.user_metadata?.avatar_url || `https://placehold.co/100x100.png?text=${name ? name.charAt(0).toUpperCase() : 'U'}`,
         class: classToSave,
@@ -183,59 +194,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         updated_at: new Date().toISOString(),
       };
       
-      logActivity("Profile Creation Attempt", "Attempting to create profile in Supabase 'profiles' table.", { userId: authData.user.id, payload: profilePayload });
+      // logActivity("Profile Creation Attempt", "Attempting to create profile in Supabase 'profiles' table.", { userId: authData.user.id, payload: profilePayload }, authData.user.id);
 
       const { error: profileError } = await supabase
         .from('profiles')
         .insert(profilePayload);
 
       if (profileError) {
-        console.error("PROFILE CREATION FAILED.");
-        console.error("Type of profileError:", typeof profileError);
-        console.error("Keys in profileError:", Object.keys(profileError));
-        console.error("Raw profileError object:", profileError);
-        
-        let detailedMessage = "Error creating profile. ";
-        if (typeof profileError === 'object' && profileError !== null) {
-          if ((profileError as PostgrestError).message) {
-            detailedMessage += `Message: ${(profileError as PostgrestError).message}. `;
-          }
-          if ((profileError as PostgrestError).details) {
-            detailedMessage += `Details: ${(profileError as PostgrestError).details}. `;
-          }
-          if ((profileError as PostgrestError).code) {
-            detailedMessage += `Code: ${(profileError as PostgrestError).code}. `;
-          }
-          if ((profileError as PostgrestError).hint) {
-            detailedMessage += `Hint: ${(profileError as PostgrestError).hint}. `;
-          }
-          
-          if (Object.keys(profileError).length === 0) {
-              detailedMessage += "The error object received was empty. This often points to RLS issues or table/column misconfigurations in Supabase. Please check your Supabase dashboard logs (Database and PostgREST) and RLS policies for the 'profiles' table.";
-          } else if (!(profileError as PostgrestError).message && !(profileError as PostgrestError).details && Object.keys(profileError).length > 0) {
-             detailedMessage += `Full error object: ${JSON.stringify(profileError)}. Please check Supabase dashboard logs.`;
-          }
-        } else {
-          detailedMessage += `Unexpected error format: ${JSON.stringify(profileError)}. Please check Supabase dashboard logs.`;
+        let consoleErrorMessage = "PROFILE CREATION FAILED.\n";
+        consoleErrorMessage += `  Type of profileError: ${typeof profileError}\n`;
+        consoleErrorMessage += `  Keys in profileError: ${Object.keys(profileError).join(', ')}\n`;
+        try {
+          consoleErrorMessage += `  Raw profileError object: ${JSON.stringify(profileError, null, 2)}\n`;
+        } catch (e) {
+          consoleErrorMessage += `  Raw profileError object: (Could not stringify - circular structure or other issue)\n`;
         }
-        console.error(detailedMessage);
-        
-        logActivity("Auth Error", "Signup succeeded in Auth, but profile creation failed.", { 
-          uid: authData.user.id, 
-          supa_error_message: (profileError as PostgrestError)?.message || JSON.stringify(profileError) || "Unknown error structure",
-          supa_error_details: (profileError as PostgrestError)?.details || "N/A",
-          supa_error_code: (profileError as PostgrestError)?.code || "N/A",
-          supa_error_hint: (profileError as PostgrestError)?.hint || "N/A",
-          raw_error_string: JSON.stringify(profileError) 
-        });
-        throw profileError; 
-      }
-      
-      logActivity("Auth", "Signup successful and profile created.", { uid: authData.user.id, email });
 
+
+        if (typeof profileError === 'object' && profileError !== null) {
+          const pe = profileError as any; 
+          consoleErrorMessage += `  Message: ${pe.message}\n`;
+          consoleErrorMessage += `  Details: ${pe.details}\n`;
+          consoleErrorMessage += `  Hint: ${pe.hint}\n`;
+          consoleErrorMessage += `  Code: ${pe.code}\n`;
+
+          if (Object.keys(profileError).length === 0 && !pe.message) {
+            consoleErrorMessage += "\n  IMPORTANT: The error object from Supabase is empty or lacks a message. This often indicates a Row Level Security (RLS) policy violation or a database schema issue (e.g., missing table, incorrect foreign key, NOT NULL constraint violation) on the 'profiles' table. Please check your Supabase dashboard logs (Database and PostgREST sections) for the specific server-side SQL error.\n";
+          }
+        }
+        console.error(consoleErrorMessage);
+        
+        logActivity(
+            "Auth Error", 
+            "Signup succeeded in Auth, but profile creation failed.", 
+            { 
+                uid: authData.user.id, 
+                supa_error_message: (profileError as PostgrestError)?.message || "N/A",
+                supa_error_details: (profileError as PostgrestError)?.details || "N/A",
+                supa_error_code: (profileError as PostgrestError)?.code || "N/A",
+                supa_error_hint: (profileError as PostgrestError)?.hint || "N/A",
+                raw_error_string: JSON.stringify(profileError) 
+            },
+            authData.user.id
+        );
+        // We are NOT re-throwing the error here.
+        // The signup in auth.users was successful, and an email was sent.
+        // The user should get the "check your email" toast.
+        // The profile creation failure needs to be debugged on the Supabase side (RLS, schema).
+      } else {
+        // Profile creation was successful
+        logActivity("Auth", "Signup successful and profile created.", { uid: authData.user.id, email }, authData.user.id);
+      }
     } catch (error) {
+      // This catches errors from supabase.auth.signUp or other unexpected issues
       console.error("Overall signup process error:", error);
-      logActivity("Auth Error", "Signup process failed.", { email, error_message: (error as Error).message, raw_error: JSON.stringify(error) });
+      logActivity("Auth Error", "Signup process failed.", { email, error_message: (error as Error).message, raw_error: JSON.stringify(error) }, undefined);
       throw error; 
     } finally {
       setIsLoading(false);
@@ -250,10 +263,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
       setAppUser(null); 
       setSupabaseUser(null);
-      logActivity("Auth", "User signed out successfully.", { uid: currentUserId });
+      logActivity("Auth", "User signed out successfully.", { uid: currentUserId }, undefined);
     } catch (error) {
       console.error("Error signing out: ", (error as Error).message || error);
-      logActivity("Auth Error", "Logout failed.", { uid: currentUserId, error: (error as Error).message });
+      logActivity("Auth Error", "Logout failed.", { uid: currentUserId, error: (error as Error).message }, undefined);
     } finally {
        setIsLoading(false);
     }
@@ -265,7 +278,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const updates = {
         ...profileData,
-        id: supabaseUser.id, 
+        // id: supabaseUser.id, // ID should not be in the update payload for an existing row typically, it's used in .eq()
         updated_at: new Date().toISOString(),
       };
 
@@ -291,16 +304,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data: updatedAuthUser, error: authUpdateError } = await supabase.auth.updateUser(authUserMetadataUpdates);
         if (authUpdateError) {
           console.warn("Profile table updated, but Supabase Auth user_metadata update failed:", authUpdateError.message);
-          logActivity("Profile Warning", "Failed to update Supabase Auth user_metadata.", { uid: supabaseUser.id, error: authUpdateError.message });
+          logActivity("Profile Warning", "Failed to update Supabase Auth user_metadata.", { uid: supabaseUser.id, error: authUpdateError.message }, supabaseUser.id);
         }
         if(updatedAuthUser?.user) setSupabaseUser(updatedAuthUser.user); 
       }
       
       const refreshedProfile = await fetchUserProfile(supabaseUser);
       setAppUser(refreshedProfile);
-      logActivity("Profile", "User profile updated in Supabase.", { uid: supabaseUser.id, updates: Object.keys(profileData) });
+      logActivity("Profile", "User profile updated in Supabase.", { uid: supabaseUser.id, updates: Object.keys(profileData) }, supabaseUser.id);
     } catch (error) {
-      logActivity("Profile Error", "User profile update failed.", { uid: supabaseUser.id, error: (error as Error).message });
+      logActivity("Profile Error", "User profile update failed.", { uid: supabaseUser.id, error: (error as Error).message }, supabaseUser.id);
       throw error;
     } finally {
       setIsLoading(false);
