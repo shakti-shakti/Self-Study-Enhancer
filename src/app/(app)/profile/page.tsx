@@ -1,10 +1,10 @@
 
 "use client"; 
 
-import { useState, useEffect, useRef, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent, type ChangeEvent } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Settings, Palette, BellDot, CheckCircle, UploadCloud, KeyRound, Volume2, Loader2 } from "lucide-react"; // Removed Edit3
+import { Settings, Palette, BellDot, CheckCircle, UploadCloud, KeyRound, Volume2, Loader2, UserCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,11 +16,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { logActivity } from '@/lib/activity-logger';
 import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
+import type { AuthError, PostgrestError } from '@supabase/supabase-js';
 
-const AVATAR_STORAGE_BUCKET_NAME = 'user-uploads'; // CORRECTED: Using hyphen
+const AVATAR_STORAGE_BUCKET_NAME = 'user-uploads'; // Using hyphen
 
 export default function ProfileSettingsPage() {
-  const { user, supabaseUser, isLoading: authLoading, fetchAppUser } = useAuth(); // Removed updateUserProfile, will use fetchAppUser after updates
+  const { user, supabaseUser, isLoading: authLoading, fetchAppUser } = useAuth();
   const { toast } = useToast();
   
   const [name, setName] = useState('');
@@ -50,14 +51,13 @@ export default function ProfileSettingsPage() {
       setTargetYear(user.target_year || 'none');
       setAvatarPreview(user.avatar_url || null);
       
-      // Theme and notification preferences are still local for UI, but could be moved to Supabase
-      const savedTheme = localStorage.getItem('appTheme');
-      if (savedTheme) setTheme(savedTheme); else setTheme('dark'); // Default to dark
+      const savedTheme = typeof window !== "undefined" ? localStorage.getItem('appTheme') : 'dark';
+      if (savedTheme) setTheme(savedTheme); else setTheme('dark');
       
-      const savedNotifications = localStorage.getItem('appNotifications');
+      const savedNotifications = typeof window !== "undefined" ? localStorage.getItem('appNotifications') : 'true';
       if (savedNotifications) setNotifications(savedNotifications === 'true'); else setNotifications(true);
 
-      const savedAlarmTone = localStorage.getItem('appAlarmToneName');
+      const savedAlarmTone = typeof window !== "undefined" ? localStorage.getItem('appAlarmToneName') : null;
       if (savedAlarmTone) setAlarmToneName(savedAlarmTone);
     }
   }, [user]);
@@ -65,11 +65,13 @@ export default function ProfileSettingsPage() {
   const handleProfileSaveChanges = async (e: FormEvent) => {
     e.preventDefault();
     if (!user || !supabaseUser) {
-      toast({ variant: "destructive", title: "Error", description: "User not authenticated." });
+      toast({ variant: "destructive", title: "Authentication Error", description: "User not authenticated. Please log in again." });
       return;
     }
     setIsSavingProfile(true);
     let finalAvatarUrl = user.avatar_url || undefined;
+    let profileUpdateError: PostgrestError | null = null;
+    let authMetaError: AuthError | null = null;
 
     try {
       if (avatarFile) {
@@ -77,12 +79,11 @@ export default function ProfileSettingsPage() {
         const uniqueFileName = `avatar_${Date.now()}.${fileExt}`;
         const filePath = `avatars/${supabaseUser.id}/${uniqueFileName}`; 
 
-        // Attempt to remove old avatar if it exists and was managed by us
         if (user.avatar_url && user.avatar_url.includes(supabaseUser.id) && user.avatar_url.includes(AVATAR_STORAGE_BUCKET_NAME)) {
             const oldPathParts = user.avatar_url.split(`${AVATAR_STORAGE_BUCKET_NAME}/`);
             if (oldPathParts.length > 1) {
                 const oldStoragePathWithPotentialQuery = oldPathParts[1];
-                const oldStoragePath = oldStoragePathWithPotentialQuery.split('?')[0]; // Remove query params if any
+                const oldStoragePath = oldStoragePathWithPotentialQuery.split('?')[0];
                 if(oldStoragePath && oldStoragePath.startsWith('avatars/')){ 
                     try {
                         await supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).remove([oldStoragePath]);
@@ -101,7 +102,7 @@ export default function ProfileSettingsPage() {
         if (uploadError) throw new Error(`Avatar upload failed: ${uploadError.message}`);
         
         const { data: urlData } = supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).getPublicUrl(filePath);
-        finalAvatarUrl = urlData.publicUrl; // This assumes the bucket is public or RLS allows access
+        finalAvatarUrl = urlData.publicUrl;
         setAvatarFile(null); 
         setAvatarPreview(finalAvatarUrl); 
       }
@@ -111,53 +112,48 @@ export default function ProfileSettingsPage() {
         class: selectedClass === "none" ? null : selectedClass, 
         target_year: targetYear === "none" ? null : targetYear,
         avatar_url: finalAvatarUrl,
-        updated_at: new Date().toISOString() // Add updated_at for profiles table
+        updated_at: new Date().toISOString()
       };
       
-      const { error: profileDbError } = await supabase
+      const { error: dbError } = await supabase
         .from('profiles')
         .update(profileUpdates)
         .eq('id', supabaseUser.id);
       
-      if (profileDbError) throw profileDbError;
+      profileUpdateError = dbError;
+      if (profileUpdateError) throw profileUpdateError;
 
-      // Update auth.user_metadata separately if name or avatar_url changed
       const metadataUpdates: { data: Record<string, any> } = { data: {} };
-      if (profileUpdates.name && profileUpdates.name !== (user.name || supabaseUser.user_metadata?.name)) {
-        metadataUpdates.data.name = profileUpdates.name;
-      }
-      if (profileUpdates.avatar_url && profileUpdates.avatar_url !== (user.avatar_url || supabaseUser.user_metadata?.avatar_url)) {
-        metadataUpdates.data.avatar_url = profileUpdates.avatar_url;
-      }
+      if (profileUpdates.name !== user.name) metadataUpdates.data.name = profileUpdates.name;
+      if (profileUpdates.avatar_url !== user.avatar_url) metadataUpdates.data.avatar_url = profileUpdates.avatar_url;
 
       if (Object.keys(metadataUpdates.data).length > 0) {
-        const { error: authMetaError } = await supabase.auth.updateUser(metadataUpdates);
+        const { error: metaErr } = await supabase.auth.updateUser(metadataUpdates);
+        authMetaError = metaErr;
         if (authMetaError) {
             console.warn("Profile DB updated, but auth user_metadata update failed:", authMetaError);
-            logActivity("Profile Warning", "Failed to update auth user_metadata.", { error: authMetaError.message }, supabaseUser.id);
         }
       }
       
       // Save UI preferences locally
-      localStorage.setItem('appTheme', theme);
-      document.documentElement.classList.remove('light', 'dark', 'system');
-      if (theme === 'system') {
-          const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-          document.documentElement.classList.add(systemTheme);
-      } else {
-          document.documentElement.classList.add(theme);
+      if (typeof window !== "undefined") {
+        localStorage.setItem('appTheme', theme);
+        document.documentElement.classList.remove('light', 'dark');
+        document.documentElement.classList.add(theme); // Simplified logic, assumes theme is 'light' or 'dark'
+        
+        localStorage.setItem('appNotifications', String(notifications));
+        if (alarmToneName) localStorage.setItem('appAlarmToneName', alarmToneName);
       }
-      localStorage.setItem('appNotifications', String(notifications));
-      if (alarmToneName) localStorage.setItem('appAlarmToneName', alarmToneName);
 
-      toast({ title: "Profile Updated", description: "Your changes have been saved to Supabase.", action: <CheckCircle className="h-5 w-5 text-green-500" />, });
+      toast({ title: "Profile Updated", description: "Your changes have been successfully saved.", action: <CheckCircle className="h-5 w-5 text-green-500" />, });
       logActivity("Profile Update", "User profile changes saved.", { updates: Object.keys(profileUpdates).filter(k => profileUpdates[k as keyof typeof profileUpdates] !== undefined) }, supabaseUser.id);
       
-      if(fetchAppUser) await fetchAppUser(supabaseUser); // Re-fetch user from auth context to update UI
+      if(fetchAppUser) await fetchAppUser(supabaseUser);
 
     } catch (err) {
-      toast({ variant: "destructive", title: "Update Failed", description: err instanceof Error ? err.message : "Could not save profile changes.", });
-      logActivity("Profile Update Error", "Failed to save profile changes.", { error: err instanceof Error ? err.message : String(err) }, supabaseUser.id);
+      const castError = err as AuthError | PostgrestError | Error;
+      toast({ variant: "destructive", title: "Update Failed", description: castError.message || "Could not save profile changes." });
+      logActivity("Profile Update Error", "Failed to save profile changes.", { error: castError.message || String(err) }, supabaseUser.id);
     } finally {
       setIsSavingProfile(false);
     }
@@ -166,7 +162,7 @@ export default function ProfileSettingsPage() {
   const handlePhotoChangeClick = () => { fileInputRef.current?.click(); };
   const handleAlarmToneChangeClick = () => { alarmToneInputRef.current?.click(); };
 
-  const handleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelected = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && file.type.startsWith('image/')) {
       setAvatarFile(file); 
@@ -181,11 +177,11 @@ export default function ProfileSettingsPage() {
     }
   };
   
-  const handleAlarmToneSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAlarmToneSelected = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && file.type.startsWith('audio/')) {
       setAlarmToneName(file.name); 
-      localStorage.setItem('appAlarmToneName', file.name); // Persist locally
+      if (typeof window !== "undefined") localStorage.setItem('appAlarmToneName', file.name);
       toast({ title: "Alarm Tone Selected", description: `"${file.name}" selected. This is saved locally.`, });
       if(user) logActivity("Profile Alarm Tone Select", "New alarm tone file selected (mock).", { fileName: file.name }, user.id);
     } else if (file) {
@@ -223,14 +219,15 @@ export default function ProfileSettingsPage() {
       logActivity("Profile Password Change", "Password change successful.", undefined, supabaseUser.id);
     } catch (err) {
       console.error("Password change error:", err);
-      toast({ variant: "destructive", title: "Password Change Failed", description: (err as Error).message || "An error occurred." });
-      logActivity("Profile Password Error", "Password change failed.", { error: (err as Error).message }, supabaseUser.id);
+      const castError = err as AuthError | Error;
+      toast({ variant: "destructive", title: "Password Change Failed", description: castError.message || "An error occurred." });
+      logActivity("Profile Password Error", "Password change failed.", { error: castError.message }, supabaseUser.id);
     } finally {
       setIsPasswordSaving(false);
     }
   };
 
-   if (authLoading || (!user && !authLoading)) { 
+   if (authLoading || (!user && !authLoading && !supabaseUser)) { 
     return (
         <div className="space-y-6">
           <div className="flex items-center space-x-3"> <Skeleton className="h-8 w-8 rounded-full" /> <Skeleton className="h-8 w-48" /> </div>
@@ -255,7 +252,7 @@ export default function ProfileSettingsPage() {
         </div>
     );
   }
-  if (!user && !authLoading) { 
+  if (!user && !supabaseUser && !authLoading) { 
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
         <Settings className="h-16 w-16 text-muted-foreground" />
@@ -278,8 +275,8 @@ export default function ProfileSettingsPage() {
           <CardContent className="space-y-6">
             <div className="flex items-center space-x-4">
               <Avatar className="h-20 w-20">
-                <AvatarImage src={avatarPreview || `https://placehold.co/100x100.png?text=${(user?.name || 'U').charAt(0)}`} alt={user?.name || "User"} data-ai-hint="user avatar large" />
-                <AvatarFallback>{(user?.name || "U").charAt(0).toUpperCase()}</AvatarFallback>
+                <AvatarImage src={avatarPreview || `https://placehold.co/100x100.png?text=${(user?.name || supabaseUser?.email ||'U').charAt(0)}`} alt={user?.name || supabaseUser?.email || "User"} data-ai-hint="user avatar large" />
+                <AvatarFallback>{(user?.name || supabaseUser?.email ||"U").charAt(0).toUpperCase()}</AvatarFallback>
               </Avatar>
               <input type="file" ref={fileInputRef} onChange={handleFileSelected} className="hidden" accept="image/*"/>
               <Button type="button" variant="outline" onClick={handlePhotoChangeClick} disabled={isSavingProfile}> <UploadCloud className="mr-2 h-4 w-4"/> Change Photo </Button>
@@ -287,7 +284,7 @@ export default function ProfileSettingsPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div> <Label htmlFor="name">Full Name</Label> <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your Name" disabled={isSavingProfile} /> </div>
-              <div> <Label htmlFor="email">Email Address</Label> <Input id="email" type="email" value={email} readOnly disabled placeholder="your@email.com" /> </div>
+              <div> <Label htmlFor="email">Email Address</Label> <Input id="email" type="email" value={email || supabaseUser?.email || ''} readOnly disabled placeholder="your@email.com" /> </div>
               <div> <Label htmlFor="class-select">Class</Label> <Select value={selectedClass || "none"} onValueChange={setSelectedClass} disabled={isSavingProfile}> <SelectTrigger id="class-select"> <SelectValue placeholder="Select Your Class" /> </SelectTrigger> <SelectContent> <SelectItem value="none">None</SelectItem> <SelectItem value="11">Class 11</SelectItem> <SelectItem value="12">Class 12</SelectItem> <SelectItem value="dropper">Dropper</SelectItem></SelectContent> </Select> </div>
               <div> <Label htmlFor="target-year">Target NEET Year</Label> <Select value={targetYear || "none"} onValueChange={setTargetYear} disabled={isSavingProfile}> <SelectTrigger id="target-year"> <SelectValue placeholder="Select Target Year" /> </SelectTrigger> <SelectContent> <SelectItem value="none">None</SelectItem> {[new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2, new Date().getFullYear() + 3].map(year => ( <SelectItem key={year} value={String(year)}>{String(year)}</SelectItem> ))} </SelectContent> </Select> </div>
             </div>
@@ -303,7 +300,7 @@ export default function ProfileSettingsPage() {
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
             <div className="space-y-0.5"> <Label htmlFor="theme-select" className="text-base flex items-center"><Palette className="mr-2 h-5 w-5 text-muted-foreground"/>App Theme</Label> <p className="text-sm text-muted-foreground">Choose your preferred app appearance.</p> </div>
-            <Select value={theme} onValueChange={(newTheme) => { setTheme(newTheme); }} disabled={isSavingProfile}> <SelectTrigger id="theme-select" className="w-[180px]"> <SelectValue placeholder="Select Theme" /> </SelectTrigger> <SelectContent> <SelectItem value="light">Light</SelectItem> <SelectItem value="dark">Dark</SelectItem> <SelectItem value="system">System Default</SelectItem> </SelectContent> </Select>
+            <Select value={theme} onValueChange={(newTheme) => { setTheme(newTheme); }} disabled={isSavingProfile}> <SelectTrigger id="theme-select" className="w-[180px]"> <SelectValue placeholder="Select Theme" /> </SelectTrigger> <SelectContent> <SelectItem value="light">Light</SelectItem> <SelectItem value="dark">Dark</SelectItem></SelectContent> </Select>
           </div>
           <div className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
              <div className="space-y-0.5"> <Label htmlFor="notifications-switch" className="text-base flex items-center"><BellDot className="mr-2 h-5 w-5 text-muted-foreground"/>Notifications</Label> <p className="text-sm text-muted-foreground">Enable or disable task and app notifications (visual only).</p> </div>
@@ -329,7 +326,7 @@ export default function ProfileSettingsPage() {
             <h3 className="text-lg font-medium flex items-center"><KeyRound className="mr-2 h-5 w-5 text-muted-foreground"/>Change Password</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div> <Label htmlFor="new-password">New Password</Label> <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password (min. 6 chars)" disabled={isPasswordSaving}/> </div>
-              <div> <Label htmlFor="confirm-new-password">Confirm New Password</Label> <Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="Confirm new password" disabled={isPasswordSaving}/> </div>
+              <div> <Label htmlFor="confirm-new-password">Confirm New Password</Label <Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="Confirm new password" disabled={isPasswordSaving}/> </div>
             </div>
             <Button type="submit" variant="outline" disabled={isPasswordSaving || !newPassword || newPassword.length < 6 || newPassword !== confirmNewPassword}> {isPasswordSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <KeyRound className="mr-2 h-4 w-4"/>} Update Password </Button>
           </form>
