@@ -2,7 +2,7 @@
 "use client";
 import { useRef, useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
-import { UploadCloud, FileText, ImageIcon, FolderOpen, Search, Trash2, ExternalLink } from "lucide-react";
+import { UploadCloud, FileText, ImageIcon, FolderOpen, Search, Trash2, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Image from "next/image";
@@ -18,24 +18,24 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
 import { logActivity } from '@/lib/activity-logger';
+import { useAuth } from '@/hooks/use-auth';
+import { supabase } from '@/lib/supabaseClient';
 
 interface AppFile {
-  id: string;
-  name: string;
-  type: "pdf" | "image" | "doc" | "unknown";
-  size: string;
-  date: string;
-  preview?: string; 
-  aiHint?: string;
-  isUploaded?: boolean; 
-  localFileUrl?: string; // For images, store blob URL if it's from local upload
+  id: string; // Supabase UUID
+  user_id: string;
+  file_name: string;
+  file_type: "pdf" | "image" | "doc" | "unknown";
+  file_size_text: string;
+  original_upload_date?: string; // ISO Date string
+  ai_hint?: string;
+  created_at?: string;
+  // For client-side preview only, not stored in DB directly for this simple metadata model
+  local_preview_url?: string; 
 }
 
-const FILES_KEY = 'neetPrepProFiles';
-
-function getFileType(fileName: string): "pdf" | "image" | "doc" | "unknown" {
+function getFileType(fileName: string): AppFile['file_type'] {
   const extension = fileName.split('.').pop()?.toLowerCase();
   if (extension === 'pdf') return 'pdf';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension || '')) return 'image';
@@ -51,96 +51,150 @@ function formatFileSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-
 export default function FilesPage() {
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<AppFile[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(true);
+  const [isUploading, setIsUploading] = useState(false); // For mock upload indication
   const [searchTerm, setSearchTerm] = useState('');
 
-  useEffect(() => {
-    const loadedFiles = loadFromLocalStorage<AppFile[]>(FILES_KEY, []);
-    // For images loaded from localStorage, blob URLs won't be valid.
-    // We only persist files that were 'isUploaded'.
-    // If preview was a persistent URL, it would work.
-    // We might need to re-think preview for locally "uploaded" files if not persisted to a server.
-    setFiles(loadedFiles.filter(f => f.isUploaded));
-  }, []);
+  const fetchFiles = async () => {
+    if (!user) return;
+    setIsLoadingFiles(true);
+    try {
+      const { data, error } = await supabase
+        .from('user_files')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setFiles(data || []);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Fetching Files", description: (error as Error).message });
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  };
 
   useEffect(() => {
-    saveToLocalStorage(FILES_KEY, files.filter(f => f.isUploaded)); // Only save user-uploaded files
-  }, [files]);
-
+    if (user && !authLoading) {
+      fetchFiles();
+    }
+  }, [user, authLoading]);
 
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
 
-  const handleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!user) {
+        toast({variant: "destructive", title: "Not Logged In", description: "Please log in to add files."});
+        return;
+    }
     const selectedFiles = event.target.files;
     if (selectedFiles && selectedFiles.length > 0) {
-      const newAppFiles: AppFile[] = Array.from(selectedFiles).map(file => {
-        const localFileUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
-        return {
-          id: crypto.randomUUID(),
-          name: file.name,
-          type: getFileType(file.name),
-          size: formatFileSize(file.size),
-          date: new Date().toISOString().split('T')[0],
-          preview: localFileUrl, // Use blob URL for preview
-          localFileUrl: localFileUrl, // Store it for potential re-use if needed, though blob URLs are temporary
-          aiHint: file.type.startsWith('image/') ? 'uploaded image' : 'document file',
-          isUploaded: true,
+      setIsUploading(true);
+      const filesToUploadPromises = Array.from(selectedFiles).map(file => {
+        const fileData = {
+          user_id: user.id,
+          file_name: file.name,
+          file_type: getFileType(file.name),
+          file_size_text: formatFileSize(file.size),
+          original_upload_date: new Date().toISOString().split('T')[0],
+          ai_hint: file.type.startsWith('image/') ? 'uploaded image' : 'document file',
         };
+        // In a real scenario, you would upload to Supabase Storage here and store the path/URL.
+        // For now, we just save metadata.
+        return supabase.from('user_files').insert(fileData).select().single();
       });
-      setFiles(prevFiles => [...newAppFiles, ...prevFiles]);
-      toast({
-        title: `${newAppFiles.length} File(s) Added`,
-        description: `${newAppFiles.map(f => f.name).join(', ')} are now listed. These are stored in your browser's local list.`,
-      });
-      logActivity("File Upload", `${newAppFiles.length} file(s) selected`, { names: newAppFiles.map(f => f.name) });
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ""; // Reset file input
+
+      try {
+        const results = await Promise.all(filesToUploadPromises);
+        const newDbFiles: AppFile[] = results.map(res => res.data).filter(Boolean) as AppFile[];
+        
+        // For client-side preview of newly selected images
+        const clientSidePreviews: Partial<Record<string, string>> = {};
+        Array.from(selectedFiles).forEach((file, index) => {
+            if(newDbFiles[index] && file.type.startsWith('image/')) {
+                clientSidePreviews[newDbFiles[index].id] = URL.createObjectURL(file);
+            }
+        });
+
+        setFiles(prevFiles => [...newDbFiles.map(dbFile => ({...dbFile, local_preview_url: clientSidePreviews[dbFile.id]})), ...prevFiles]);
+
+        toast({
+          title: `${newDbFiles.length} File(s) Added`,
+          description: `${newDbFiles.map(f => f.file_name).join(', ')} added to your list.`,
+        });
+        logActivity("File Add", `${newDbFiles.length} file(s) metadata added`, { names: newDbFiles.map(f => f.file_name), userId: user.id });
+      } catch (error) {
+        toast({ variant: "destructive", title: "Error Adding Files", description: (error as Error).message });
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ""; 
+        }
       }
     }
   };
   
-  const handleDeleteFile = (fileId: string) => {
+  const handleDeleteFile = async (fileId: string) => {
+    if (!user) return;
     const fileToDelete = files.find(f => f.id === fileId);
-    if (fileToDelete && fileToDelete.localFileUrl) {
-      URL.revokeObjectURL(fileToDelete.localFileUrl); // Clean up blob URL
+    if (!fileToDelete) return;
+
+    // Revoke local preview URL if it exists
+    if (fileToDelete.local_preview_url) {
+      URL.revokeObjectURL(fileToDelete.local_preview_url);
     }
-    setFiles(prevFiles => prevFiles.filter(f => f.id !== fileId));
-    if (fileToDelete) {
+
+    try {
+        const { error } = await supabase
+            .from('user_files')
+            .delete()
+            .eq('id', fileId)
+            .eq('user_id', user.id);
+        if (error) throw error;
+        
+        setFiles(prevFiles => prevFiles.filter(f => f.id !== fileId));
         toast({
-        title: "File Removed From List",
-        description: `"${fileToDelete.name}" has been removed from your local list.`,
-        variant: "destructive"
+            title: "File Removed",
+            description: `"${fileToDelete.file_name}" has been removed from your list.`,
+            variant: "destructive"
         });
-        logActivity("File Delete", `File removed from list: "${fileToDelete.name}"`);
+        logActivity("File Delete", `File metadata removed: "${fileToDelete.file_name}"`, { fileId, userId: user.id });
+    } catch (error) {
+        toast({ variant: "destructive", title: "Error Removing File", description: (error as Error).message });
     }
   };
 
   const handleOpenFile = (file: AppFile) => {
-    // For actual file opening, we'd need the File object if it was a recent upload.
-    // Since we're only storing metadata in localStorage, "opening" non-images is tricky.
-    // For images with a blob URL, we could open them.
-    if (file.type === 'image' && file.preview) { // Preview might be a blob URL
-        window.open(file.preview, '_blank');
-        logActivity("File Open", `Opened image preview: ${file.name}`);
+    // Actual file opening depends on having the file content or a direct URL.
+    // Since we only store metadata (and not actual files in Supabase Storage yet),
+    // this remains a placeholder action.
+    // If file.local_preview_url exists (for recently selected images), we can open that.
+    if (file.file_type === 'image' && file.local_preview_url) {
+        window.open(file.local_preview_url, '_blank');
+        logActivity("File Open Preview", `Opened local image preview: ${file.file_name}`, {userId: user?.id});
     } else {
         toast({
-            title: "Open File (Mock)", 
-            description: `Opening "${file.name}" would require handling its specific type. For this demo, you'd typically download and open with system apps. Images from uploads can be previewed.`
+            title: "Open File (Info)", 
+            description: `This app stores file references. To open "${file.file_name}", you'd typically use a download link if it were stored in cloud storage. For now, only image previews from new selections are directly viewable.`
         });
-        logActivity("File Open", `File open action (mock): ${file.name}`);
+        logActivity("File Open Action", `File open action (info): ${file.file_name}`, {userId: user?.id});
     }
   };
 
 
   const filteredFiles = files.filter(file => 
-    file.name.toLowerCase().includes(searchTerm.toLowerCase())
+    file.file_name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  if (authLoading && !user) {
+    return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -150,21 +204,22 @@ export default function FilesPage() {
         className="hidden" 
         onChange={handleFileSelected}
         multiple 
+        disabled={isUploading || !user}
       />
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <UploadCloud className="h-8 w-8 text-primary" />
           <h1 className="text-3xl font-bold tracking-tight">My Files &amp; Resources</h1>
         </div>
-        <Button onClick={handleUploadClick}>
-          <UploadCloud className="mr-2 h-4 w-4" />
-          Add File(s) to List
+        <Button onClick={handleUploadClick} disabled={isUploading || !user}>
+          {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <UploadCloud className="mr-2 h-4 w-4" />}
+          Add File(s)
         </Button>
       </div>
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Study Materials</CardTitle>
-          <CardDescription>Add references to your notes (PDFs, Docs), images, and any helpful resources for easy access. (File list and image previews are saved locally in your browser. Actual files are not uploaded to a server.)</CardDescription>
+          <CardDescription>Add references to your notes, images, and resources. File metadata is saved to your account.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center space-x-2 mb-6">
@@ -173,35 +228,42 @@ export default function FilesPage() {
               className="max-w-sm" 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              disabled={isLoadingFiles || !user}
             />
-            <Button variant="outline" size="icon"><Search className="h-4 w-4"/></Button>
+            <Button variant="outline" size="icon" disabled={isLoadingFiles || !user}><Search className="h-4 w-4"/></Button>
           </div>
-          {filteredFiles.length > 0 ? (
+          {isLoadingFiles ? (
+            <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : filteredFiles.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredFiles.map(file => (
                 <Card key={file.id} className="hover:shadow-md transition-shadow flex flex-col bg-card/80">
                   <CardContent className="p-4 flex items-start space-x-3 flex-1">
-                    {file.type === 'image' && file.preview ? (
+                    {file.file_type === 'image' && file.local_preview_url ? (
                        <Image 
-                         src={file.preview} 
-                         alt={file.name} 
-                         data-ai-hint={file.aiHint || "document placeholder"} 
+                         src={file.local_preview_url} 
+                         alt={file.file_name} 
+                         data-ai-hint={file.ai_hint || "document placeholder"} 
                          width={64} height={64} 
                          className="rounded object-cover h-16 w-16 border bg-muted"
                          onError={(e) => { e.currentTarget.src = 'https://placehold.co/64x64.png?text=Err'; }}
                        />
-                    ) : file.type === 'pdf' ? (
+                    ) : file.file_type === 'image' ? ( // Placeholder if no local_preview_url (e.g. fetched from DB without blob)
+                       <ImageIcon className="h-10 w-10 text-blue-500 flex-shrink-0 mt-1" />
+                    ) : file.file_type === 'pdf' ? (
                       <FileText className="h-10 w-10 text-destructive flex-shrink-0 mt-1" />
-                    ) : file.type === 'doc' ? (
+                    ) : file.file_type === 'doc' ? (
                       <FileText className="h-10 w-10 text-blue-500 flex-shrink-0 mt-1" />
                     ) : (
                       <FileText className="h-10 w-10 text-muted-foreground flex-shrink-0 mt-1" />
                     )}
                     <div className="overflow-hidden flex-1">
-                      <p className="font-semibold truncate text-sm" title={file.name}>{file.name}</p>
-                      <p className="text-xs text-muted-foreground">{file.size} - {file.date}</p>
+                      <p className="font-semibold truncate text-sm" title={file.file_name}>{file.file_name}</p>
+                      <p className="text-xs text-muted-foreground">{file.file_size_text} - {file.original_upload_date ? new Date(file.original_upload_date).toLocaleDateString() : new Date(file.created_at!).toLocaleDateString()}</p>
                       <Button variant="link" size="sm" className="p-0 h-auto mt-1 text-xs" onClick={() => handleOpenFile(file)}>
-                        <ExternalLink className="mr-1 h-3 w-3"/>Open/Preview
+                        <ExternalLink className="mr-1 h-3 w-3"/>Open/Preview Info
                       </Button>
                     </div>
                   </CardContent>
@@ -209,14 +271,14 @@ export default function FilesPage() {
                      <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button variant="ghost" size="sm" className="w-full justify-center text-destructive hover:bg-destructive/10 hover:text-destructive">
-                          <Trash2 className="h-4 w-4 mr-1.5"/> Remove from list
+                          <Trash2 className="h-4 w-4 mr-1.5"/> Remove
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            This action cannot be undone. This will remove the file listing for "{file.name}" from your browser's local storage. The original file on your computer is not affected.
+                            This will remove the file reference for "{file.file_name}" from your account. This action cannot be undone.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
@@ -234,8 +296,8 @@ export default function FilesPage() {
           ) : (
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex flex-col items-center justify-center text-center">
               <FolderOpen className="h-16 w-16 text-muted-foreground mb-4"/>
-              <p className="text-muted-foreground">{searchTerm ? "No files match your search." : "No files added to list yet."}</p>
-              <p className="text-sm text-muted-foreground">Click "Add File(s) to List" to add references to your study materials.</p>
+              <p className="text-muted-foreground">{searchTerm ? "No files match your search." : "No files added yet."}</p>
+              <p className="text-sm text-muted-foreground">Click "Add File(s)" to add references to your study materials.</p>
             </div>
           )}
         </CardContent>
@@ -243,5 +305,4 @@ export default function FilesPage() {
     </div>
   );
 }
-
     

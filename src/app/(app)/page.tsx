@@ -2,13 +2,12 @@
 "use client";
 import { useState, useEffect, type FormEvent } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Lightbulb, Target, CheckCircle, BarChart3, Clock, Edit, Save } from "lucide-react";
-import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
+import { Lightbulb, Target, CheckCircle, BarChart3, Clock, Edit, Save, Loader2 } from "lucide-react";
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import TaskManagement from '@/components/TaskManagement';
+import TaskManagement from '@/components/TaskManagement'; // This component is using localStorage, might need review
 import {
   Dialog,
   DialogContent,
@@ -20,6 +19,12 @@ import {
   DialogClose
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/use-auth';
+import { supabase } from '@/lib/supabaseClient';
+import { format, parseISO } from 'date-fns';
+
+// Still using localStorage for this one, can be migrated to dashboard_configurations if needed.
+const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
 
 interface LastQuizScore {
   score: number;
@@ -27,12 +32,10 @@ interface LastQuizScore {
   accuracy: number;
   timestamp: string;
 }
-const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
-const COUNTDOWN_CONFIG_KEY = 'neetPrepProCountdownConfig';
 
 interface CountdownConfig {
   eventName: string;
-  eventDate: string; // ISO string
+  eventDate: string; // ISO string for date part only, e.g., "2024-12-31"
 }
 
 const syllabusFacts = [
@@ -52,50 +55,82 @@ const syllabusFacts = [
 
 export default function DashboardPage() {
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null);
   const [randomFact, setRandomFact] = useState(syllabusFacts[0]);
 
   const [countdownConfig, setCountdownConfig] = useState<CountdownConfig | null>(null);
+  const [isLoadingCountdown, setIsLoadingCountdown] = useState(true);
   const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
   const [isCountdownDialogOpen, setIsCountdownDialogOpen] = useState(false);
+  const [isSubmittingCountdown, setIsSubmittingCountdown] = useState(false);
   const [tempEventName, setTempEventName] = useState('');
-  const [tempEventDate, setTempEventDate] = useState('');
+  const [tempEventDate, setTempEventDate] = useState(''); // YYYY-MM-DD
 
+  const fetchCountdownConfig = async () => {
+    if (!user) return;
+    setIsLoadingCountdown(true);
+    try {
+      const { data, error } = await supabase
+        .from('dashboard_configurations')
+        .select('countdown_event_name, countdown_event_date')
+        .eq('user_id', user.id)
+        .single();
 
-  useEffect(() => {
-    const storedScore = loadFromLocalStorage<LastQuizScore | null>(LAST_QUIZ_SCORE_KEY, null);
-    setLastQuizScore(storedScore);
-    setRandomFact(syllabusFacts[Math.floor(Math.random() * syllabusFacts.length)]);
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116: no rows found
 
-    const storedCountdownConfig = loadFromLocalStorage<CountdownConfig | null>(COUNTDOWN_CONFIG_KEY, null);
-    if (storedCountdownConfig) {
-      setCountdownConfig(storedCountdownConfig);
-      setTempEventName(storedCountdownConfig.eventName);
-      // Ensure date is in YYYY-MM-DD for input[type=date]
-      setTempEventDate(new Date(storedCountdownConfig.eventDate).toISOString().split('T')[0]);
-    } else {
-      // Default countdown to a hypothetical NEET exam date (e.g., next May 5th)
+      if (data) {
+        setCountdownConfig({ eventName: data.countdown_event_name || "NEET Exam", eventDate: data.countdown_event_date || getDefaultNeetDate() });
+        setTempEventName(data.countdown_event_name || "NEET Exam");
+        setTempEventDate(data.countdown_event_date || getDefaultNeetDate());
+      } else {
+        const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+        setCountdownConfig(defaultConfig);
+        setTempEventName(defaultConfig.eventName);
+        setTempEventDate(defaultConfig.eventDate);
+        // Optionally save default to DB if user has no config yet
+        await supabase.from('dashboard_configurations').upsert({ user_id: user.id, countdown_event_name: defaultConfig.eventName, countdown_event_date: defaultConfig.eventDate });
+      }
+    } catch (err) {
+      console.error("Error fetching countdown config:", err);
+      const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+      setCountdownConfig(defaultConfig); // Fallback to default
+      setTempEventName(defaultConfig.eventName);
+      setTempEventDate(defaultConfig.eventDate);
+    } finally {
+      setIsLoadingCountdown(false);
+    }
+  };
+  
+  const getDefaultNeetDate = () => {
       const today = new Date();
       let nextMay = new Date(today.getFullYear(), 4, 5); // May is month 4
       if (today > nextMay) {
         nextMay.setFullYear(today.getFullYear() + 1);
       }
-      const defaultConfig: CountdownConfig = {
-        eventName: "NEET Exam",
-        eventDate: nextMay.toISOString()
-      };
-      setCountdownConfig(defaultConfig);
-      setTempEventName(defaultConfig.eventName);
-      setTempEventDate(nextMay.toISOString().split('T')[0]);
-      saveToLocalStorage(COUNTDOWN_CONFIG_KEY, defaultConfig);
-    }
-  }, []);
+      return format(nextMay, 'yyyy-MM-dd');
+  }
+
 
   useEffect(() => {
-    if (!countdownConfig) return;
+    // Load last quiz score from localStorage
+    const storedScore = localStorage.getItem(LAST_QUIZ_SCORE_KEY);
+    if (storedScore) setLastQuizScore(JSON.parse(storedScore));
+    
+    setRandomFact(syllabusFacts[Math.floor(Math.random() * syllabusFacts.length)]);
+
+    if (user && !authLoading) {
+      fetchCountdownConfig();
+    }
+  }, [user, authLoading]);
+
+  useEffect(() => {
+    if (!countdownConfig || !countdownConfig.eventDate) return;
 
     const calculateTimeLeft = () => {
-      const difference = +new Date(countdownConfig.eventDate) - +new Date();
+      // Ensure eventDate is treated as local date then converted to UTC start of day for calculation
+      const targetDate = new Date(countdownConfig.eventDate + "T00:00:00Z"); // Assuming eventDate is YYYY-MM-DD, interpret as UTC start of day
+      const difference = +targetDate - +new Date();
       let newTimeLeft = { days: 0, hours: 0, minutes: 0, seconds: 0 };
 
       if (difference > 0) {
@@ -110,33 +145,60 @@ export default function DashboardPage() {
     };
 
     const timer = setInterval(calculateTimeLeft, 1000);
-    calculateTimeLeft(); // Initial calculation
+    calculateTimeLeft(); 
     return () => clearInterval(timer);
   }, [countdownConfig]);
 
-  const handleSaveCountdown = (e: FormEvent) => {
+  const handleSaveCountdown = async (e: FormEvent) => {
     e.preventDefault();
+    if (!user) return;
     if (!tempEventName || !tempEventDate) {
       toast({ variant: "destructive", title: "Error", description: "Event name and date are required." });
       return;
     }
+    setIsSubmittingCountdown(true);
     const newConfig: CountdownConfig = {
       eventName: tempEventName,
-      eventDate: new Date(tempEventDate + "T00:00:00").toISOString(), // Ensure it's start of the day in UTC for consistency
+      eventDate: tempEventDate, // Already YYYY-MM-DD
     };
-    setCountdownConfig(newConfig);
-    saveToLocalStorage(COUNTDOWN_CONFIG_KEY, newConfig);
-    setIsCountdownDialogOpen(false);
-    toast({ title: "Countdown Updated", description: `Timer set for ${newConfig.eventName}.` });
+    try {
+      const { error } = await supabase
+        .from('dashboard_configurations')
+        .upsert({ 
+          user_id: user.id, 
+          countdown_event_name: newConfig.eventName, 
+          countdown_event_date: newConfig.eventDate,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+      
+      if (error) throw error;
+
+      setCountdownConfig(newConfig);
+      setIsCountdownDialogOpen(false);
+      toast({ title: "Countdown Updated", description: `Timer set for ${newConfig.eventName}.` });
+    } catch (err) {
+      toast({ variant: "destructive", title: "Error Saving Countdown", description: (err as Error).message });
+    } finally {
+        setIsSubmittingCountdown(false);
+    }
   };
+  
+  if (authLoading && !user) {
+    return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
 
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold tracking-tight">Welcome to NEET Prep Pro!</h1>
 
-      <TaskManagement />
+      <TaskManagement /> {/* This TaskManagement is still using localStorage - needs migration if its data should be per-user and persistent */}
       
-      {countdownConfig && (
+      {isLoadingCountdown ? (
+        <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
+          <CardHeader><CardTitle><Loader2 className="mr-2 h-5 w-5 animate-spin inline-block"/>Loading Countdown...</CardTitle></CardHeader>
+          <CardContent className="h-24"></CardContent> {/* Placeholder height */}
+        </Card>
+      ) : countdownConfig && (
         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
           <CardHeader className="pb-2">
             <div className="flex justify-between items-center">
@@ -146,22 +208,27 @@ export default function DashboardPage() {
                   <Button variant="ghost" size="icon" className="h-7 w-7"><Edit className="h-4 w-4"/></Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Customize Countdown</DialogTitle>
-                    <DialogDescription>Set the event name and date for your countdown timer.</DialogDescription>
-                  </DialogHeader>
-                  <form onSubmit={handleSaveCountdown} className="grid gap-4 py-4">
-                    <div>
-                      <Label htmlFor="event-name">Event Name</Label>
-                      <Input id="event-name" value={tempEventName} onChange={(e) => setTempEventName(e.target.value)} placeholder="e.g., NEET Exam 2025" />
-                    </div>
-                    <div>
-                      <Label htmlFor="event-date">Event Date</Label>
-                      <Input id="event-date" type="date" value={tempEventDate} onChange={(e) => setTempEventDate(e.target.value)} />
+                  <form onSubmit={handleSaveCountdown}>
+                    <DialogHeader>
+                      <DialogTitle>Customize Countdown</DialogTitle>
+                      <DialogDescription>Set the event name and date for your countdown timer.</DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div>
+                        <Label htmlFor="event-name">Event Name</Label>
+                        <Input id="event-name" value={tempEventName} onChange={(e) => setTempEventName(e.target.value)} placeholder="e.g., NEET Exam 2025" />
+                      </div>
+                      <div>
+                        <Label htmlFor="event-date">Event Date</Label>
+                        <Input id="event-date" type="date" value={tempEventDate} onChange={(e) => setTempEventDate(e.target.value)} />
+                      </div>
                     </div>
                     <DialogFooter>
-                       <DialogClose asChild><Button variant="outline" type="button">Cancel</Button></DialogClose>
-                      <Button type="submit"><Save className="mr-2 h-4 w-4"/>Save Countdown</Button>
+                       <DialogClose asChild><Button type="button" variant="outline" disabled={isSubmittingCountdown}>Cancel</Button></DialogClose>
+                      <Button type="submit" disabled={isSubmittingCountdown}>
+                        {isSubmittingCountdown && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}
+                        Save Countdown
+                      </Button>
                     </DialogFooter>
                   </form>
                 </DialogContent>
@@ -170,22 +237,10 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-              <div>
-                <p className="text-4xl font-bold">{timeLeft.days}</p>
-                <p className="text-sm text-muted-foreground">Days</p>
-              </div>
-              <div>
-                <p className="text-4xl font-bold">{timeLeft.hours}</p>
-                <p className="text-sm text-muted-foreground">Hours</p>
-              </div>
-              <div>
-                <p className="text-4xl font-bold">{timeLeft.minutes}</p>
-                <p className="text-sm text-muted-foreground">Minutes</p>
-              </div>
-              <div>
-                <p className="text-4xl font-bold">{timeLeft.seconds}</p>
-                <p className="text-sm text-muted-foreground">Seconds</p>
-              </div>
+              <div><p className="text-4xl font-bold">{timeLeft.days}</p><p className="text-sm text-muted-foreground">Days</p></div>
+              <div><p className="text-4xl font-bold">{timeLeft.hours}</p><p className="text-sm text-muted-foreground">Hours</p></div>
+              <div><p className="text-4xl font-bold">{timeLeft.minutes}</p><p className="text-sm text-muted-foreground">Minutes</p></div>
+              <div><p className="text-4xl font-bold">{timeLeft.seconds}</p><p className="text-sm text-muted-foreground">Seconds</p></div>
             </div>
           </CardContent>
         </Card>
@@ -197,12 +252,8 @@ export default function DashboardPage() {
           <CardTitle>Random Syllabus Fact</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-lg">
-            {randomFact.fact}
-          </p>
-          <CardDescription className="mt-2 text-sm">
-            Source: {randomFact.source}
-          </CardDescription>
+          <p className="text-lg">{randomFact.fact}</p>
+          <CardDescription className="mt-2 text-sm">Source: {randomFact.source}</CardDescription>
         </CardContent>
       </Card>
 
@@ -235,15 +286,9 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="mt-1 space-y-1">
-                 <Link href="/tasks" passHref>
-                    <Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Manage Task Reminders</Button>
-                </Link>
-                 <Link href="/custom-tasks" passHref>
-                    <Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Custom Tasks</Button>
-                </Link>
-                 <Link href="/day-planner" passHref>
-                    <Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open Day Planner</Button>
-                </Link>
+                 <Link href="/tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Manage Task Reminders</Button></Link>
+                 <Link href="/custom-tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Custom Tasks</Button></Link>
+                 <Link href="/day-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open Day Planner</Button></Link>
             </div>
           </CardContent>
         </Card>
@@ -254,15 +299,9 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
              <div className="mt-1 space-y-1">
-                 <Link href="/ai-assistant" passHref>
-                    <Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Chat with AI Assistant</Button>
-                </Link>
-                 <Link href="/ncert-viewer" passHref>
-                    <Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open NCERT Viewer</Button>
-                </Link>
-                <Link href="/activity-history" passHref>
-                    <Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Activity History</Button>
-                </Link>
+                 <Link href="/ai-assistant" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Chat with AI Assistant</Button></Link>
+                 <Link href="/ncert-viewer" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open NCERT Viewer</Button></Link>
+                <Link href="/activity-history" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Activity History</Button></Link>
             </div>
           </CardContent>
         </Card>
@@ -270,3 +309,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+    

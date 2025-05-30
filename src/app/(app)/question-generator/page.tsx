@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
-import { FileQuestion, Settings2, History, BarChart3, Save, Copy, HelpCircle, Loader2, ListChecks, BookOpen, ChevronRight, ChevronLeft, PlayCircle, RotateCcw, CheckCircle, XCircle } from "lucide-react";
+import { FileQuestion, Settings2, History, BarChart3, Save, Copy, HelpCircle, Loader2, ListChecks, BookOpen, ChevronRight, ChevronLeft, PlayCircle, RotateCcw, CheckCircle, XCircle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from '@/components/ui/skeleton';
 import { logActivity } from '@/lib/activity-logger';
-import { useAuth } from '@/hooks/use-auth'; // Import useAuth
+import { useAuth } from '@/hooks/use-auth';
 import {
   Dialog,
   DialogContent,
@@ -23,25 +23,32 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogClose,
 } from "@/components/ui/dialog";
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
-import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage'; // Keep for saved questions for now
+import { supabase } from '@/lib/supabaseClient';
 
-// TODO: Migrate saved questions and last quiz score to Supabase
-const SAVED_QUESTIONS_KEY = 'neetPrepProSavedQuestionsMCQ';
-const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
-
+const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore'; // Still using localStorage for this one, can be migrated.
 
 interface QuestionWithAnswer extends GenerateRandomQuestionOutput {
-  id: string;
+  id: string; // Frontend generated UUID for list key
   userAnswerIndex?: number;
   isCorrect?: boolean;
 }
 
-interface SavedQuizQuestion extends GenerateRandomQuestionOutput {
-  id: string;
-  savedAt: string;
+interface SavedQuestionSupabase extends GenerateRandomQuestionOutput {
+  id: string; // Supabase UUID
+  user_id: string;
+  question_text: string;
+  // options is JSONB in Supabase, matching GenerateRandomQuestionOutput.options
+  // correct_answer_index matches
+  // explanation matches
+  subject?: string;
+  topic?: string;
+  source?: string;
+  difficulty?: string;
+  saved_at: string; // timestamptz
 }
 
 interface LastQuizScore {
@@ -53,7 +60,7 @@ interface LastQuizScore {
 
 export default function QuestionGeneratorPage() {
   const { toast } = useToast();
-  const { user } = useAuth(); // Get user
+  const { user, isLoading: authLoading } = useAuth();
 
   const [selectedClass, setSelectedClass] = useState('11');
   const [subject, setSubject] = useState('physics');
@@ -68,12 +75,13 @@ export default function QuestionGeneratorPage() {
   const [selectedAnswer, setSelectedAnswer] = useState<string | undefined>(undefined);
   
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
+  const [isFetchingSavedQuestions, setIsFetchingSavedQuestions] = useState(false);
   const [overallError, setOverallError] = useState<string | null>(null);
 
   const [score, setScore] = useState(0);
-  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null);
+  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null); // Still from localStorage
 
-  const [savedIndividualQuestions, setSavedIndividualQuestions] = useState<SavedQuizQuestion[]>([]);
+  const [savedIndividualQuestions, setSavedIndividualQuestions] = useState<SavedQuestionSupabase[]>([]);
   const [isSavedQuestionsDialogOpen, setIsSavedQuestionsDialogOpen] = useState(false);
   
   const [isExplanationDialogOpen, setIsExplanationDialogOpen] = useState(false);
@@ -82,13 +90,35 @@ export default function QuestionGeneratorPage() {
   const [questionToExplain, setQuestionToExplain] = useState<string | null>(null);
 
   useEffect(() => {
-    setSavedIndividualQuestions(loadFromLocalStorage<SavedQuizQuestion[]>(SAVED_QUESTIONS_KEY, []));
-    setLastQuizScore(loadFromLocalStorage<LastQuizScore | null>(LAST_QUIZ_SCORE_KEY, null));
+    // Load last quiz score from localStorage (can be migrated to Supabase later if needed for cross-device history)
+    const storedScore = localStorage.getItem(LAST_QUIZ_SCORE_KEY);
+    if (storedScore) setLastQuizScore(JSON.parse(storedScore));
   }, []);
 
+  const fetchSavedQuestions = async () => {
+    if (!user) return;
+    setIsFetchingSavedQuestions(true);
+    try {
+      const { data, error } = await supabase
+        .from('saved_questions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('saved_at', { ascending: false });
+      if (error) throw error;
+      setSavedIndividualQuestions(data.map(q => ({...q, question: q.question_text} as SavedQuestionSupabase)) || []);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Fetching Saved Questions", description: (error as Error).message });
+    } finally {
+      setIsFetchingSavedQuestions(false);
+    }
+  };
+  
   useEffect(() => {
-    saveToLocalStorage(SAVED_QUESTIONS_KEY, savedIndividualQuestions);
-  }, [savedIndividualQuestions]);
+    if (user && !authLoading && isSavedQuestionsDialogOpen) {
+      fetchSavedQuestions();
+    }
+  }, [user, authLoading, isSavedQuestionsDialogOpen]);
+
 
   const topicsBySubject: Record<string, string[]> = {
     physics: ["Kinematics", "Laws of Motion", "Work, Energy & Power", "Rotational Motion", "Gravitation", "Properties of Solids & Liquids", "Thermodynamics", "Oscillations & Waves", "Optics", "Electrostatics", "Current Electricity", "Magnetic Effects of Current", "EMI & AC", "EM Waves", "Dual Nature of Matter", "Atoms & Nuclei", "Semiconductors"],
@@ -115,7 +145,7 @@ export default function QuestionGeneratorPage() {
         logActivity(
             "Quiz Generation", 
             `Fetching question ${currentQuestionSet.length + 1} for ${subject} - ${topic}`,
-            undefined, user.id
+            { userId: user.id }
         );
     }
     try {
@@ -128,17 +158,18 @@ export default function QuestionGeneratorPage() {
       const output = await generateRandomQuestion(input);
       if (user) {
         logActivity(
-            "Quiz Generation", 
+            "Quiz Generation Success", 
             `Successfully fetched question: ${output.question.substring(0,30)}...`,
-            undefined, user.id
+            { userId: user.id }
         );
       }
-      return { ...output, id: crypto.randomUUID() };
+      return { ...output, id: crypto.randomUUID() }; // Frontend ID
     } catch (err) {
       console.error("Error generating question:", err);
       const errorMessage = err instanceof Error ? err.message : "Unknown error generating question.";
       setOverallError(`Failed to generate question: ${errorMessage}`);
       toast({ variant: "destructive", title: "Question Generation Error", description: errorMessage });
+      if (user) logActivity("Quiz Generation Error", errorMessage, { userId: user.id });
       return null;
     } finally {
       setIsLoadingQuestion(false);
@@ -168,7 +199,7 @@ export default function QuestionGeneratorPage() {
     }
 
     const updatedQuestionSet = [...currentQuestionSet];
-    let currentScore = score; // Use a local variable for score updates within this function
+    let currentScore = score;
 
     if (currentQuestionIndex < updatedQuestionSet.length) { 
         const currentQ = updatedQuestionSet[currentQuestionIndex];
@@ -179,7 +210,7 @@ export default function QuestionGeneratorPage() {
             currentScore++;
         }
     }
-    setScore(currentScore); // Update state score once
+    setScore(currentScore);
 
     if (currentQuestionIndex < numberOfQuestions - 1) {
       setSelectedAnswer(undefined);
@@ -197,8 +228,7 @@ export default function QuestionGeneratorPage() {
             logActivity(
                 "Quiz Error", 
                 "Failed to load next question mid-quiz", 
-                { attempted: currentQuestionIndex + 1},
-                user.id
+                { attempted: currentQuestionIndex + 1, userId: user.id },
             );
           }
           const finalTotalQuestions = updatedQuestionSet.length;
@@ -209,7 +239,7 @@ export default function QuestionGeneratorPage() {
               accuracy: finalAccuracy,
               timestamp: new Date().toISOString(),
           };
-          saveToLocalStorage(LAST_QUIZ_SCORE_KEY, newLastScore); // Persist score
+          localStorage.setItem(LAST_QUIZ_SCORE_KEY, JSON.stringify(newLastScore));
           setLastQuizScore(newLastScore);
           return;
         }
@@ -227,7 +257,7 @@ export default function QuestionGeneratorPage() {
           accuracy: finalAccuracy,
           timestamp: new Date().toISOString(),
       };
-      saveToLocalStorage(LAST_QUIZ_SCORE_KEY, newLastScore); // Persist score
+      localStorage.setItem(LAST_QUIZ_SCORE_KEY, JSON.stringify(newLastScore));
       setLastQuizScore(newLastScore);
 
       setQuizState('completed');
@@ -235,8 +265,7 @@ export default function QuestionGeneratorPage() {
         logActivity(
             "Quiz Completed", 
             `User finished quiz. Score: ${currentScore}/${finalTotalQuestions}`, 
-            { score: currentScore, total: finalTotalQuestions },
-            user.id
+            { score: currentScore, total: finalTotalQuestions, userId: user.id },
         );
       }
     }
@@ -247,29 +276,59 @@ export default function QuestionGeneratorPage() {
     setOverallError(null);
   };
 
-  const handleSaveIndividualQuestion = (questionData: GenerateRandomQuestionOutput) => {
-    const newSavedQuestion: SavedQuizQuestion = {
-      ...questionData,
-      id: crypto.randomUUID(),
-      savedAt: new Date().toISOString(),
+  const handleSaveIndividualQuestion = async (questionData: GenerateRandomQuestionOutput) => {
+    if (!user) {
+        toast({variant: "destructive", title: "Not Logged In", description: "You must be logged in to save questions."});
+        return;
+    }
+    const questionToSave = {
+        user_id: user.id,
+        question_text: questionData.question,
+        options: questionData.options,
+        correct_answer_index: questionData.correctAnswerIndex,
+        explanation: questionData.explanation,
+        subject: subject, // Or from questionData if available
+        topic: topic,     // Or from questionData if available
+        source: source,   // Or from questionData if available
+        difficulty: difficulty === 'any' ? null : difficulty, // Or from questionData
     };
-    setSavedIndividualQuestions(prev => [newSavedQuestion, ...prev]);
-    toast({title: "Question Saved!", description: "This question has been added to your saved questions list."});
-    if (user) {
-        logActivity(
-            "Question Save", 
-            `Question saved: "${questionData.question.substring(0,30)}..."`,
-            undefined, user.id
-        );
+
+    try {
+        const { data, error } = await supabase.from('saved_questions').insert(questionToSave).select().single();
+        if (error) throw error;
+        toast({title: "Question Saved!", description: "This question has been saved to your account."});
+        if (data) setSavedIndividualQuestions(prev => [({...data, question: data.question_text} as SavedQuestionSupabase), ...prev]);
+        logActivity( "Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`, { userId: user.id } );
+    } catch (err) {
+        toast({variant: "destructive", title: "Save Failed", description: (err as Error).message});
+        logActivity( "Question Save Error", `Failed to save question: ${(err as Error).message}`, { userId: user.id } );
     }
   };
+  
+  const handleDeleteSavedQuestion = async (questionId: string) => {
+    if (!user || !questionId) return;
+    try {
+      const { error } = await supabase
+        .from('saved_questions')
+        .delete()
+        .eq('id', questionId)
+        .eq('user_id', user.id);
+      if (error) throw error;
+      setSavedIndividualQuestions(prev => prev.filter(q => q.id !== questionId));
+      toast({title: "Question Deleted", description: "Saved question removed."});
+      logActivity("Saved Question Delete", `Deleted saved question ID: ${questionId}`, { userId: user.id });
+    } catch (error) {
+      toast({variant: "destructive", title: "Delete Failed", description: (error as Error).message});
+    }
+  };
+
 
   const handleCopyQuestion = (questionText: string) => {
     navigator.clipboard.writeText(questionText)
       .then(() => {
         toast({ title: "Question Copied!", description: "Question text copied to clipboard." });
         if (user) {
-            logActivity("Question Action", "Question text copied.", { length: questionText.length }, user.id);
+            logActivity("Question Action", "Question text copied.", { length: questionText.length, userId: user.id });
         }
       })
       .catch(err => {
@@ -284,7 +343,7 @@ export default function QuestionGeneratorPage() {
      setQuestionToExplain(qText);
      setDetailedExplanation(null);
      setIsExplanationDialogOpen(true);
-     if(user) logActivity("Question Explanation", `Requested explanation for: "${qText.substring(0,50)}..."`, undefined, user.id);
+     if(user) logActivity("Question Explanation", `Requested explanation for: "${qText.substring(0,50)}..."`, {userId: user.id});
      try {
         const input: ExplainQuestionInput = { question: qText };
         const output: ExplainQuestionOutput = await explainQuestion(input);
@@ -294,13 +353,17 @@ export default function QuestionGeneratorPage() {
         const errorMessage = err instanceof Error ? err.message : "Unknown error explaining question.";
         setDetailedExplanation(`Failed to get detailed explanation: ${errorMessage}`);
         toast({ variant: "destructive", title: "Explanation Error", description: errorMessage});
-        if(user) logActivity("Explanation Error", `Failed to explain question: "${qText.substring(0,50)}..."`, { error: errorMessage }, user.id);
+        if(user) logActivity("Explanation Error", `Failed to explain: "${qText.substring(0,50)}..."`, { error: errorMessage, userId: user.id });
      } finally {
         setIsExplaining(false);
      }
   };
 
   const currentQuestionData = currentQuestionSet[currentQuestionIndex];
+
+  if (authLoading && !user) {
+    return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
 
   if (quizState === 'inProgress') {
     if (isLoadingQuestion && !currentQuestionData) {
@@ -437,19 +500,24 @@ export default function QuestionGeneratorPage() {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Saved Individual Questions</DialogTitle>
-              <DialogDescription>Review questions you've saved. These are not quiz results. Saved on: {savedIndividualQuestions.length > 0 && savedIndividualQuestions[0]?.savedAt ? new Date(savedIndividualQuestions[0].savedAt).toLocaleDateString() : 'N/A'}</DialogDescription>
+              <DialogDescription>Review questions you've saved to your account.</DialogDescription>
             </DialogHeader>
             <ScrollArea className="max-h-[60vh] p-1 mt-2">
-              {savedIndividualQuestions.length > 0 ? (
+              {isFetchingSavedQuestions ? (
+                <div className="flex justify-center items-center p-8"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+              ) : savedIndividualQuestions.length > 0 ? (
                 <div className="space-y-4">
                   {savedIndividualQuestions.map(sq => (
                     <Card key={sq.id} className="bg-card/60">
                       <CardContent className="p-4 space-y-2">
-                        <p className="text-sm font-semibold">Q: {sq.question}</p>
-                        <p className="text-xs">Options: {sq.options.map((o, i) => `${String.fromCharCode(65+i)}. ${o}`).join(" | ")}</p>
-                        <p className="text-xs text-green-400">Correct: {String.fromCharCode(65+sq.correctAnswerIndex)}. {sq.options[sq.correctAnswerIndex]}</p>
+                        <div className="flex justify-between items-start">
+                          <p className="text-sm font-semibold flex-1">Q: {sq.question_text}</p>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleDeleteSavedQuestion(sq.id)}><Trash2 className="h-4 w-4"/></Button>
+                        </div>
+                        <p className="text-xs">Options: {sq.options.map((o: string, i: number) => `${String.fromCharCode(65+i)}. ${o}`).join(" | ")}</p>
+                        <p className="text-xs text-green-400">Correct: {String.fromCharCode(65+sq.correct_answer_index)}. {sq.options[sq.correct_answer_index]}</p>
                         <p className="text-xs text-muted-foreground">Expl: {sq.explanation}</p>
-                        <p className="text-xs text-muted-foreground/70">Saved: {new Date(sq.savedAt).toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground/70">Saved: {new Date(sq.saved_at).toLocaleString()}</p>
                       </CardContent>
                     </Card>
                   ))}
@@ -516,7 +584,7 @@ export default function QuestionGeneratorPage() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="difficulty-select">Difficulty (Optional)</Label>
+                <Label htmlFor="difficulty-select">Difficulty</Label>
                 <Select value={difficulty} onValueChange={(value) => setDifficulty(value as 'easy' | 'medium' | 'hard' | 'any')} disabled={isLoadingQuestion}>
                   <SelectTrigger id="difficulty-select"><SelectValue placeholder="Any Difficulty" /></SelectTrigger>
                   <SelectContent>
@@ -592,13 +660,12 @@ export default function QuestionGeneratorPage() {
           </div>
           <div className="p-4 border rounded-lg">
             <h3 className="font-semibold flex items-center"><History className="mr-2 h-5 w-5 text-accent"/>Performance History</h3>
-            <p className="text-muted-foreground">View your progress over time.</p>
-            <Button variant="link" className="p-0 h-auto mt-1" disabled>View History (Coming Soon)</Button>
+            <p className="text-muted-foreground">View your progress over time (Quiz history not yet saved to Supabase).</p>
+            {/* <Button variant="link" className="p-0 h-auto mt-1" disabled>View History (Coming Soon)</Button> */}
           </div>
         </CardContent>
       </Card>
     </div>
   );
 }
-
     
