@@ -20,13 +20,14 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabaseClient';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, differenceInSeconds } from 'date-fns';
+import { logActivity } from '@/lib/activity-logger'; // Added import
 
 interface LastQuizScore {
   score: number;
   total_questions: number;
   accuracy: number;
-  quiz_timestamp: string; 
+  quiz_timestamp: string;
   subject?: string | null;
   topic?: string | null;
 }
@@ -64,25 +65,25 @@ export default function DashboardPage() {
   const [isCountdownDialogOpen, setIsCountdownDialogOpen] = useState(false);
   const [isSubmittingCountdown, setIsSubmittingCountdown] = useState(false);
   const [tempEventName, setTempEventName] = useState('');
-  const [tempEventDate, setTempEventDate] = useState(''); 
+  const [tempEventDate, setTempEventDate] = useState('');
 
   const getDefaultNeetDate = useCallback(() => {
-      const today = new Date();
-      let nextMay = new Date(today.getFullYear(), 4, 5); // May is month 4 (0-indexed)
-      if (today.getMonth() > 4 || (today.getMonth() === 4 && today.getDate() > 5)) {
-        nextMay.setFullYear(today.getFullYear() + 1);
-      }
-      return format(nextMay, 'yyyy-MM-dd');
+    const today = new Date();
+    let nextMay = new Date(today.getFullYear(), 4, 5); // May is month 4 (0-indexed)
+    if (today.getMonth() > 4 || (today.getMonth() === 4 && today.getDate() > 5)) {
+      nextMay.setFullYear(today.getFullYear() + 1);
+    }
+    return format(nextMay, 'yyyy-MM-dd');
   }, []);
 
   const fetchCountdownConfig = useCallback(async () => {
     if (!user) {
-        setIsLoadingCountdown(false);
-        const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
-        setCountdownConfig(defaultConfig);
-        setTempEventName(defaultConfig.eventName);
-        setTempEventDate(defaultConfig.eventDate);
-        return;
+      setIsLoadingCountdown(false);
+      const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+      setCountdownConfig(defaultConfig);
+      setTempEventName(defaultConfig.eventName);
+      setTempEventDate(defaultConfig.eventDate);
+      return;
     }
     setIsLoadingCountdown(true);
     try {
@@ -92,45 +93,39 @@ export default function DashboardPage() {
         .eq('user_id', user.id)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error; // PGRST116: single row not found means no config yet
+      if (error && error.code !== 'PGRST116') throw error;
 
       if (data && data.countdown_event_name && data.countdown_event_date) {
         const config = { eventName: data.countdown_event_name, eventDate: format(parseISO(data.countdown_event_date), 'yyyy-MM-dd') };
         setCountdownConfig(config);
         setTempEventName(config.eventName);
         setTempEventDate(config.eventDate);
-      } else { // No config found in DB for this user, set default and save it
+      } else {
         const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
         setCountdownConfig(defaultConfig);
         setTempEventName(defaultConfig.eventName);
         setTempEventDate(defaultConfig.eventDate);
-        
-        const { error: upsertError } = await supabase
-            .from('dashboard_configurations')
-            .upsert({ 
-                user_id: user.id, 
-                countdown_event_name: defaultConfig.eventName, 
-                countdown_event_date: defaultConfig.eventDate,
-                updated_at: new Date().toISOString()
-            }, { onConflict: 'user_id' }); // Use onConflict to handle if row already exists (e.g. from another session)
-        if(upsertError) {
-          console.error("Error saving default countdown to Supabase:", upsertError);
-          logActivity("Dashboard Error", "Failed to save default countdown config", { error: upsertError.message }, user.id);
-        }
+        await supabase
+          .from('dashboard_configurations')
+          .upsert({
+            user_id: user.id,
+            countdown_event_name: defaultConfig.eventName,
+            countdown_event_date: defaultConfig.eventDate,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id' });
       }
     } catch (err) {
       console.error("Error fetching/setting countdown config from Supabase:", err);
-      // Fallback to default if Supabase fetch fails
       const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
-      setCountdownConfig(defaultConfig); 
+      setCountdownConfig(defaultConfig);
       setTempEventName(defaultConfig.eventName);
       setTempEventDate(defaultConfig.eventDate);
-      if(user) logActivity("Dashboard Error", "Error fetching countdown config", { error: (err as Error).message }, user.id);
+      if (user) logActivity("Dashboard Error", "Error fetching countdown config", { error: (err as Error).message }, user.id);
     } finally {
       setIsLoadingCountdown(false);
     }
-  }, [user, getDefaultNeetDate]); // Removed logActivity from dependency array
-  
+  }, [user, getDefaultNeetDate]);
+
   const fetchLastQuizScore = useCallback(async () => {
     if (!user) {
       setIsLoadingQuizScore(false);
@@ -147,17 +142,16 @@ export default function DashboardPage() {
         .limit(1)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error; // PGRST116 means no rows found, which is not an error for this
+      if (error && error.code !== 'PGRST116') throw error;
       setLastQuizScore(data as LastQuizScore | null);
     } catch (err) {
       console.error("Error fetching last quiz score from Supabase:", err);
-      setLastQuizScore(null); // Set to null on error
-      if(user) logActivity("Dashboard Error", "Error fetching last quiz score", { error: (err as Error).message }, user.id);
+      setLastQuizScore(null);
+      if (user) logActivity("Dashboard Error", "Error fetching last quiz score", { error: (err as Error).message }, user.id);
     } finally {
       setIsLoadingQuizScore(false);
     }
-  }, [user]); // Removed logActivity from dependency array
-
+  }, [user]);
 
   useEffect(() => {
     setRandomFact(syllabusFacts[Math.floor(Math.random() * syllabusFacts.length)]);
@@ -165,14 +159,13 @@ export default function DashboardPage() {
       fetchCountdownConfig();
       fetchLastQuizScore();
     } else if (!authLoading && !user) {
-        // Handle non-logged in state for countdown
-        const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
-        setCountdownConfig(defaultConfig);
-        setTempEventName(defaultConfig.eventName);
-        setTempEventDate(defaultConfig.eventDate);
-        setIsLoadingCountdown(false);
-        setLastQuizScore(null);
-        setIsLoadingQuizScore(false);
+      const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+      setCountdownConfig(defaultConfig);
+      setTempEventName(defaultConfig.eventName);
+      setTempEventDate(defaultConfig.eventDate);
+      setIsLoadingCountdown(false);
+      setLastQuizScore(null);
+      setIsLoadingQuizScore(false);
     }
   }, [user, authLoading, fetchCountdownConfig, fetchLastQuizScore, getDefaultNeetDate]);
 
@@ -180,81 +173,79 @@ export default function DashboardPage() {
     if (!countdownConfig || !countdownConfig.eventDate) return;
 
     const calculateTimeLeft = () => {
-      // Ensure eventDate is treated as a date without time for accurate daily countdown
-      const targetDateLocal = new Date(countdownConfig.eventDate + "T00:00:00"); // Parse as local midnight
+      const targetDateLocal = parseISO(countdownConfig.eventDate + "T00:00:00");
+      const now = new Date();
+      const difference = differenceInSeconds(targetDateLocal, now);
       
-      const difference = +targetDateLocal - +new Date();
       let newTimeLeft = { days: 0, hours: 0, minutes: 0, seconds: 0 };
 
       if (difference > 0) {
         newTimeLeft = {
-          days: Math.floor(difference / (1000 * 60 * 60 * 24)),
-          hours: Math.floor((difference / (1000 * 60 * 60)) % 24),
-          minutes: Math.floor((difference / 1000 / 60) % 60),
-          seconds: Math.floor((difference / 1000) % 60),
+          days: Math.floor(difference / (60 * 60 * 24)),
+          hours: Math.floor((difference / (60 * 60)) % 24),
+          minutes: Math.floor((difference / 60) % 60),
+          seconds: Math.floor(difference % 60),
         };
       }
       setTimeLeft(newTimeLeft);
     };
 
     const timer = setInterval(calculateTimeLeft, 1000);
-    calculateTimeLeft(); // Initial calculation
+    calculateTimeLeft();
     return () => clearInterval(timer);
   }, [countdownConfig]);
 
   const handleSaveCountdown = async (e: FormEvent) => {
     e.preventDefault();
     if (!user) {
-        toast({variant: "destructive", title: "Login Required", description: "You must be logged in to save countdown settings."});
-        return;
+      toast({ variant: "destructive", title: "Login Required", description: "You must be logged in to save countdown settings." });
+      return;
     }
     if (!tempEventName || !tempEventDate) {
       toast({ variant: "destructive", title: "Error", description: "Event name and date are required." });
       return;
     }
-    
+
     const newConfig: CountdownConfig = {
       eventName: tempEventName,
-      eventDate: tempEventDate, 
+      eventDate: tempEventDate,
     };
-    
-    setIsCountdownDialogOpen(false);
+
     setIsSubmittingCountdown(true);
     try {
       const { error } = await supabase
         .from('dashboard_configurations')
-        .upsert({ 
-          user_id: user.id, 
-          countdown_event_name: newConfig.eventName, 
+        .upsert({
+          user_id: user.id,
+          countdown_event_name: newConfig.eventName,
           countdown_event_date: newConfig.eventDate,
           updated_at: new Date().toISOString()
         }, { onConflict: 'user_id' });
-      
+
       if (error) throw error;
-      setCountdownConfig(newConfig); 
+      setCountdownConfig(newConfig);
+      setIsCountdownDialogOpen(false);
       toast({ title: "Countdown Updated", description: `Timer set for ${newConfig.eventName} and saved to your account.` });
       logActivity("Dashboard Config", "Countdown timer updated", { eventName: newConfig.eventName, eventDate: newConfig.eventDate }, user.id);
     } catch (err) {
       toast({ variant: "destructive", title: "Error Saving Countdown", description: (err as Error).message });
-      // Don't revert UI optimistically, let it reflect user's input
-      // setCountdownConfig(countdownConfig); // Revert to old if save fails - or let new temp value stay?
       logActivity("Dashboard Error", "Failed to save countdown config", { error: (err as Error).message }, user.id);
     } finally {
         setIsSubmittingCountdown(false);
     }
   };
-  
-  if (authLoading && !user && (isLoadingCountdown || isLoadingQuizScore)) {
+
+  if (authLoading || (!user && (isLoadingCountdown || isLoadingQuizScore))) {
     return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
 
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold tracking-tight">Welcome{user ? `, ${user.name || 'User'}` : ''}!</h1>
-      
+
       {isLoadingCountdown ? (
         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
-          <CardHeader><CardTitle><Loader2 className="mr-2 h-5 w-5 animate-spin inline-block"/>Loading Countdown...</CardTitle></CardHeader>
+          <CardHeader><CardTitle><Loader2 className="mr-2 h-5 w-5 animate-spin inline-block" />Loading Countdown...</CardTitle></CardHeader>
           <CardContent className="h-24"></CardContent>
         </Card>
       ) : countdownConfig ? (
@@ -265,7 +256,7 @@ export default function DashboardPage() {
               {user && (
                 <Dialog open={isCountdownDialogOpen} onOpenChange={setIsCountdownDialogOpen}>
                   <DialogTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7"><Edit className="h-4 w-4"/></Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7"><Edit className="h-4 w-4" /></Button>
                   </DialogTrigger>
                   <DialogContent className="sm:max-w-md">
                     <form onSubmit={handleSaveCountdown}>
@@ -284,9 +275,9 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <DialogFooter>
-                         <DialogClose asChild><Button type="button" variant="outline" disabled={isSubmittingCountdown}>Cancel</Button></DialogClose>
+                        <DialogClose asChild><Button type="button" variant="outline" disabled={isSubmittingCountdown}>Cancel</Button></DialogClose>
                         <Button type="submit" disabled={isSubmittingCountdown}>
-                          {isSubmittingCountdown && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}
+                          {isSubmittingCountdown && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           Save Countdown
                         </Button>
                       </DialogFooter>
@@ -306,7 +297,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       ) : (
-         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
+        <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
           <CardHeader><CardTitle>Set Countdown</CardTitle></CardHeader>
           <CardContent><p>Could not load countdown configuration. {user ? "You can set one by clicking the edit icon." : "Log in to set a personalized countdown."}</p></CardContent>
         </Card>
@@ -326,58 +317,58 @@ export default function DashboardPage() {
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <Card className="hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center space-x-2 pb-2">
-             <Target className="h-5 w-5 text-accent"/>
+            <Target className="h-5 w-5 text-accent" />
             <CardTitle className="text-lg">Performance Snapshot</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoadingQuizScore ? (
-              <div className="space-y-2 flex items-center"> <Loader2 className="mr-2 h-5 w-5 animate-spin"/> Loading last quiz...</div>
+              <div className="space-y-2 flex items-center"> <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading last quiz...</div>
             ) : lastQuizScore ? (
               <div>
                 <p className="text-sm text-muted-foreground">
-                  Last Quiz ({new Date(lastQuizScore.quiz_timestamp).toLocaleDateString()})
+                  Last Quiz ({lastQuizScore.quiz_timestamp ? format(parseISO(lastQuizScore.quiz_timestamp), 'PPP') : 'N/A'})
                   {lastQuizScore.subject && ` - ${lastQuizScore.subject}`}
                   {lastQuizScore.topic && ` (${lastQuizScore.topic})`}
                 </p>
-                <p className="text-2xl font-bold">{lastQuizScore.accuracy.toFixed(0)}% 
+                <p className="text-2xl font-bold">{lastQuizScore.accuracy.toFixed(0)}%
                   <span className="text-sm font-normal text-muted-foreground"> ({lastQuizScore.score}/{lastQuizScore.total_questions} correct)</span>
                 </p>
               </div>
             ) : (
-              <p className="text-muted-foreground">{ user ? "Complete a quiz in the Question Generator to see your performance." : "Log in and complete a quiz to track performance."}</p>
+              <p className="text-muted-foreground">{user ? "Complete a quiz in the Question Generator to see your performance." : "Log in and complete a quiz to track performance."}</p>
             )}
-             <Link href="/question-generator" passHref>
-                <Button variant="link" className="p-0 h-auto mt-2 text-primary">Go to Quiz</Button>
+            <Link href="/question-generator" passHref>
+              <Button variant="link" className="p-0 h-auto mt-2 text-primary">Go to Quiz</Button>
             </Link>
           </CardContent>
         </Card>
         <Card className="hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center space-x-2 pb-2">
-            <CheckCircle className="h-5 w-5 text-accent"/>
+            <CheckCircle className="h-5 w-5 text-accent" />
             <CardTitle className="text-lg">Quick Tasks & Planners</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="mt-1 space-y-1">
-                 <Link href="/tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Task Reminders</Button></Link>
-                 <Link href="/custom-tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Custom Tasks</Button></Link>
-                 <Link href="/day-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Day Planner</Button></Link>
-                 <Link href="/month-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Month Planner</Button></Link>
-                 <Link href="/year-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Year Planner</Button></Link>
+              <Link href="/tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Task Reminders</Button></Link>
+              <Link href="/custom-tasks" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Custom Tasks</Button></Link>
+              <Link href="/day-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Day Planner</Button></Link>
+              <Link href="/month-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Month Planner</Button></Link>
+              <Link href="/year-planner" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Year Planner</Button></Link>
             </div>
           </CardContent>
         </Card>
         <Card className="hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center space-x-2 pb-2">
-            <BarChart3 className="h-5 w-5 text-accent"/>
+            <BarChart3 className="h-5 w-5 text-accent" />
             <CardTitle className="text-lg">Tools & Resources</CardTitle>
           </CardHeader>
           <CardContent>
-             <div className="mt-1 space-y-1">
-                 <Link href="/ai-assistant" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Chat with AI Assistant</Button></Link>
-                 <Link href="/ncert-viewer" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open NCERT Viewer</Button></Link>
-                <Link href="/activity-history" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Activity History</Button></Link>
-                 <Link href="/files" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">My Files</Button></Link>
-                 <Link href="/dictionary" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">AI Dictionary</Button></Link>
+            <div className="mt-1 space-y-1">
+              <Link href="/ai-assistant" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Chat with AI Assistant</Button></Link>
+              <Link href="/ncert-viewer" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">Open NCERT Viewer</Button></Link>
+              <Link href="/activity-history" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">View Activity History</Button></Link>
+              <Link href="/files" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">My Files</Button></Link>
+              <Link href="/dictionary" passHref><Button variant="link" className="p-0 h-auto text-primary w-full justify-start">AI Dictionary</Button></Link>
             </div>
           </CardContent>
         </Card>
