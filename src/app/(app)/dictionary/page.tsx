@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { logActivity } from "@/lib/activity-logger";
 import { useAuth } from "@/hooks/use-auth";
 import { supabase } from "@/lib/supabaseClient";
-import { useToast } from '@/hooks/use-toast'; // Import useToast
+import { useToast } from '@/hooks/use-toast';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,8 +21,9 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogTitle, // Added AlertDialogTitle
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"; // Import AlertDialog components
+} from "@/components/ui/alert-dialog";
 
 interface SearchHistoryItem {
   id: string; 
@@ -31,6 +32,8 @@ interface SearchHistoryItem {
   definition: string;
   timestamp: string; 
 }
+
+const HISTORY_FETCH_LIMIT = 20;
 
 export default function DictionaryPage() {
   const { user, isLoading: authLoading } = useAuth();
@@ -50,24 +53,27 @@ export default function DictionaryPage() {
     }
     setIsFetchingHistory(true);
     try {
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('dictionary_history')
         .select('*')
         .eq('user_id', user.id)
         .order('timestamp', { ascending: false })
-        .limit(20);
-      if (error) throw error;
+        .limit(HISTORY_FETCH_LIMIT);
+      if (fetchError) throw fetchError;
       setSearchHistory(data || []);
     } catch (err) {
       console.error("Error fetching dictionary history:", err);
+      toast({ variant: "destructive", title: "History Fetch Error", description: (err as Error).message });
     } finally {
       setIsFetchingHistory(false);
     }
-  }, [user]);
+  }, [user, toast]);
 
   useEffect(() => {
-    if (!authLoading) {
+    if (user && !authLoading) {
       fetchHistory();
+    } else if (!user && !authLoading) {
+      setSearchHistory([]); // Clear history if user logs out
     }
   }, [user, authLoading, fetchHistory]);
 
@@ -83,16 +89,19 @@ export default function DictionaryPage() {
     setIsLoading(true);
     setError(null);
     setDefinition(null);
-    logActivity("Dictionary", `User searched for word: "${word}"`, { word }, user.id);
+    
     try {
       const input: DefineWordInput = { word };
       const result: DefineWordOutput = await defineWord(input);
       setDefinition(result.definition);
       
+      logActivity("Dictionary", `User searched for word: "${word}"`, { word }, user.id);
+      
       const newHistoryItem = {
         user_id: user.id,
         word: word,
         definition: result.definition,
+        timestamp: new Date().toISOString(),
       };
       const { data: savedItem, error: saveError } = await supabase
         .from('dictionary_history')
@@ -101,14 +110,15 @@ export default function DictionaryPage() {
         .single();
 
       if (saveError) throw saveError;
-      if (savedItem) setSearchHistory(prev => [savedItem, ...prev].slice(0, 20));
+      if (savedItem) {
+        // Optimistically add to local state to avoid immediate re-fetch if not critical
+         setSearchHistory(prev => [savedItem as SearchHistoryItem, ...prev].slice(0, HISTORY_FETCH_LIMIT));
+      }
       
-      logActivity("Dictionary Success", `Definition found for: "${word}"`, { word }, user.id);
-
     } catch (err) {
       console.error("Error defining word or saving history:", err);
       setError("Failed to get definition or save to history. Please try again.");
-      if(user) logActivity("Dictionary Error", `Failed to define/save word: "${word}"`, { error: (err as Error).message, word }, user.id);
+      logActivity("Dictionary Error", `Failed to define/save word: "${word}"`, { error: (err as Error).message, word }, user.id);
     } finally {
       setIsLoading(false);
     }
@@ -117,16 +127,17 @@ export default function DictionaryPage() {
   const handleClearHistory = async () => {
     if (!user) return;
     try {
-      const { error } = await supabase
+      const { error: deleteError } = await supabase
         .from('dictionary_history')
         .delete()
         .eq('user_id', user.id);
-      if (error) throw error;
+      if (deleteError) throw deleteError;
       setSearchHistory([]);
       toast({ title: "History Cleared", description: "Your dictionary search history has been cleared."});
       logActivity("Dictionary", "Search history cleared.", undefined, user.id);
     } catch (err) {
       toast({ variant: "destructive", title: "Error Clearing History", description: (err as Error).message });
+      logActivity("Dictionary Error", "Failed to clear history.", { error: (err as Error).message }, user.id);
     }
   };
   
@@ -137,8 +148,18 @@ export default function DictionaryPage() {
     setIsLoading(false); 
   };
 
-  if (authLoading) {
-    return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  if (authLoading && !user) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center space-x-3"> <SpellCheck className="h-8 w-8 text-primary" /> <h1 className="text-3xl font-bold tracking-tight">AI Dictionary</h1> </div>
+        <Card>
+          <CardHeader><CardTitle>Define a Word</CardTitle></CardHeader>
+          <CardContent className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -170,6 +191,13 @@ export default function DictionaryPage() {
               </Button>
             </div>
             
+            {!user && (
+                <Alert variant="default" className="mt-4 bg-amber-500/10 border-amber-500/30">
+                    <AlertTitle className="text-amber-700 dark:text-amber-300">Login Required</AlertTitle>
+                    <AlertDescription className="text-amber-600/90 dark:text-amber-400/90">Please log in to use the dictionary and save your search history.</AlertDescription>
+                </Alert>
+            )}
+
             {isLoading && (
               <div className="space-y-2 pt-4">
                 <Skeleton className="h-4 w-1/4" />
@@ -214,7 +242,7 @@ export default function DictionaryPage() {
                                 <AlertDialogHeader>
                                     <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                                     <AlertDialogDescription>
-                                        This will permanently delete your dictionary search history.
+                                        This will permanently delete your dictionary search history from your Supabase account.
                                     </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
@@ -227,7 +255,7 @@ export default function DictionaryPage() {
                         </AlertDialog>
                     )}
                 </div>
-                <CardDescription>Your recent word searches.</CardDescription>
+                <CardDescription>Your recent word searches. (Last {HISTORY_FETCH_LIMIT} entries)</CardDescription>
             </CardHeader>
             <CardContent>
                 {isFetchingHistory ? (
@@ -243,6 +271,7 @@ export default function DictionaryPage() {
                                         variant="link" 
                                         className="p-0 h-auto text-left text-sm text-primary hover:text-primary/80 whitespace-normal leading-tight"
                                         onClick={() => handleHistoryItemClick(item)}
+                                        title={`Define "${item.word}" again`}
                                     >
                                         {item.word}
                                     </Button>
