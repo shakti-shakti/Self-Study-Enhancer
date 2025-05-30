@@ -2,7 +2,6 @@
 "use client";
 
 import { supabase } from './supabaseClient';
-import type { User } from '@supabase/supabase-js';
 
 export interface ActivityLog {
   id?: string; // UUID from Supabase, optional for new logs
@@ -13,41 +12,41 @@ export interface ActivityLog {
   details?: Record<string, any>;
 }
 
+// Interface for the object being inserted into Supabase
+interface ActivityLogInsert {
+  user_id: string | null;
+  type: string;
+  description: string;
+  details?: Record<string, any>;
+}
+
 const MAX_LOG_ENTRIES_TO_FETCH = 50;
-
-// Helper to get current user ID safely
-const getCurrentUserId = (): string | null => {
-  // This is a bit tricky as useAuth can't be used outside React components/hooks.
-  // For a robust solution, logActivity might need to accept the user object or ID.
-  // Or, the Supabase client could be set up with the session for automatic user IDing if RLS allows.
-  // For now, this is a simplification. In a real app, pass user or use server-side logging.
-  if (typeof window !== 'undefined') {
-    // Attempt to get from a potential global or session (not ideal but for client-side simplicity)
-    // A better way would be for the calling function to provide the user ID.
-  }
-  return null; // Placeholder
-};
-
 
 export async function logActivity(
   type: string,
   description: string,
   details?: Record<string, any>,
-  userId?: string | null // Allow explicitly passing userId
+  userId?: string | null // Explicitly pass userId from the calling context
 ): Promise<void> {
-  if (typeof window === 'undefined') return; // Don't run on server for now (could be adapted)
+  if (typeof window === 'undefined') return; // Don't run on server for now
 
-  const effectiveUserId = userId === undefined ? getCurrentUserId() : userId;
+  // If userId is explicitly undefined (meaning it wasn't passed), treat it as null.
+  // If userId is passed as null, it remains null.
+  // If userId is a valid string, use it.
+  const effectiveUserId = userId === undefined ? null : userId;
 
-  const newLog: Omit<ActivityLog, 'id' | 'timestamp'> = {
-    // user_id will be set by Supabase policies or explicitly if passed
-    ...(effectiveUserId && { user_id: effectiveUserId }),
+  const newLog: ActivityLogInsert = {
+    user_id: effectiveUserId, // user_id will now always be part of the payload, possibly as null
     type,
     description,
     details,
   };
 
   try {
+    // The RLS policy WITH CHECK (auth.uid() = user_id) will ensure that
+    // if the user is authenticated, newLog.user_id must match auth.uid().
+    // If newLog.user_id is null (because effectiveUserId was null), 
+    // the insert will (and should) fail for an authenticated user due to RLS.
     const { error } = await supabase.from('activity_logs').insert(newLog);
     if (error) {
       console.error("Error logging activity to Supabase:", error.message, error.details);
@@ -118,5 +117,3 @@ export async function clearUserActivityLog(userId: string): Promise<boolean> {
         return false;
     }
 }
-
-    
