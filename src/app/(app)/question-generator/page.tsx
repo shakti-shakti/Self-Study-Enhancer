@@ -29,26 +29,26 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/lib/supabaseClient';
 
-const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore'; // Still using localStorage for this one, can be migrated.
+const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
 
 interface QuestionWithAnswer extends GenerateRandomQuestionOutput {
-  id: string; // Frontend generated UUID for list key
+  id: string; 
   userAnswerIndex?: number;
   isCorrect?: boolean;
 }
 
 interface SavedQuestionSupabase extends GenerateRandomQuestionOutput {
-  id: string; // Supabase UUID
+  id: string; 
   user_id: string;
   question_text: string;
-  // options is JSONB in Supabase, matching GenerateRandomQuestionOutput.options
-  // correct_answer_index matches
-  // explanation matches
+  options: string[];
+  correct_answer_index: number;
+  explanation: string;
   subject?: string;
   topic?: string;
   source?: string;
   difficulty?: string;
-  saved_at: string; // timestamptz
+  saved_at: string; 
 }
 
 interface LastQuizScore {
@@ -57,6 +57,8 @@ interface LastQuizScore {
   accuracy: number;
   timestamp: string;
 }
+
+const SAVED_QUESTIONS_FETCH_LIMIT = 50;
 
 export default function QuestionGeneratorPage() {
   const { toast } = useToast();
@@ -79,7 +81,7 @@ export default function QuestionGeneratorPage() {
   const [overallError, setOverallError] = useState<string | null>(null);
 
   const [score, setScore] = useState(0);
-  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null); // Still from localStorage
+  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null);
 
   const [savedIndividualQuestions, setSavedIndividualQuestions] = useState<SavedQuestionSupabase[]>([]);
   const [isSavedQuestionsDialogOpen, setIsSavedQuestionsDialogOpen] = useState(false);
@@ -90,7 +92,6 @@ export default function QuestionGeneratorPage() {
   const [questionToExplain, setQuestionToExplain] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load last quiz score from localStorage (can be migrated to Supabase later if needed for cross-device history)
     const storedScore = localStorage.getItem(LAST_QUIZ_SCORE_KEY);
     if (storedScore) setLastQuizScore(JSON.parse(storedScore));
   }, []);
@@ -103,11 +104,13 @@ export default function QuestionGeneratorPage() {
         .from('saved_questions')
         .select('*')
         .eq('user_id', user.id)
-        .order('saved_at', { ascending: false });
+        .order('saved_at', { ascending: false })
+        .limit(SAVED_QUESTIONS_FETCH_LIMIT);
       if (error) throw error;
-      setSavedIndividualQuestions(data.map(q => ({...q, question: q.question_text} as SavedQuestionSupabase)) || []);
+      setSavedIndividualQuestions(data.map(q => ({...q, question: q.question_text, options: q.options as string[] } as SavedQuestionSupabase)) || []);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching Saved Questions", description: (error as Error).message });
+      logActivity("Error", "Failed to fetch saved questions", { userId: user.id, error: (error as Error).message });
     } finally {
       setIsFetchingSavedQuestions(false);
     }
@@ -145,7 +148,8 @@ export default function QuestionGeneratorPage() {
         logActivity(
             "Quiz Generation", 
             `Fetching question ${currentQuestionSet.length + 1} for ${subject} - ${topic}`,
-            { userId: user.id }
+            undefined, // No specific details object here
+            user.id
         );
     }
     try {
@@ -160,16 +164,17 @@ export default function QuestionGeneratorPage() {
         logActivity(
             "Quiz Generation Success", 
             `Successfully fetched question: ${output.question.substring(0,30)}...`,
-            { userId: user.id }
+            undefined,
+            user.id
         );
       }
-      return { ...output, id: crypto.randomUUID() }; // Frontend ID
+      return { ...output, id: crypto.randomUUID() };
     } catch (err) {
       console.error("Error generating question:", err);
       const errorMessage = err instanceof Error ? err.message : "Unknown error generating question.";
       setOverallError(`Failed to generate question: ${errorMessage}`);
       toast({ variant: "destructive", title: "Question Generation Error", description: errorMessage });
-      if (user) logActivity("Quiz Generation Error", errorMessage, { userId: user.id });
+      if (user) logActivity("Quiz Generation Error", errorMessage, undefined, user.id);
       return null;
     } finally {
       setIsLoadingQuestion(false);
@@ -228,7 +233,8 @@ export default function QuestionGeneratorPage() {
             logActivity(
                 "Quiz Error", 
                 "Failed to load next question mid-quiz", 
-                { attempted: currentQuestionIndex + 1, userId: user.id },
+                { attempted: currentQuestionIndex + 1 },
+                user.id
             );
           }
           const finalTotalQuestions = updatedQuestionSet.length;
@@ -265,7 +271,8 @@ export default function QuestionGeneratorPage() {
         logActivity(
             "Quiz Completed", 
             `User finished quiz. Score: ${currentScore}/${finalTotalQuestions}`, 
-            { score: currentScore, total: finalTotalQuestions, userId: user.id },
+            { score: currentScore, total: finalTotalQuestions },
+            user.id
         );
       }
     }
@@ -287,21 +294,21 @@ export default function QuestionGeneratorPage() {
         options: questionData.options,
         correct_answer_index: questionData.correctAnswerIndex,
         explanation: questionData.explanation,
-        subject: subject, // Or from questionData if available
-        topic: topic,     // Or from questionData if available
-        source: source,   // Or from questionData if available
-        difficulty: difficulty === 'any' ? null : difficulty, // Or from questionData
+        subject: subject,
+        topic: topic,
+        source: source,
+        difficulty: difficulty === 'any' ? undefined : difficulty,
     };
 
     try {
         const { data, error } = await supabase.from('saved_questions').insert(questionToSave).select().single();
         if (error) throw error;
         toast({title: "Question Saved!", description: "This question has been saved to your account."});
-        if (data) setSavedIndividualQuestions(prev => [({...data, question: data.question_text} as SavedQuestionSupabase), ...prev]);
-        logActivity( "Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`, { userId: user.id } );
+        if (data) setSavedIndividualQuestions(prev => [({...data, question: data.question_text, options: data.options as string[]} as SavedQuestionSupabase), ...prev].slice(0, SAVED_QUESTIONS_FETCH_LIMIT));
+        logActivity( "Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`, undefined, user.id );
     } catch (err) {
         toast({variant: "destructive", title: "Save Failed", description: (err as Error).message});
-        logActivity( "Question Save Error", `Failed to save question: ${(err as Error).message}`, { userId: user.id } );
+        logActivity( "Question Save Error", `Failed to save question: ${(err as Error).message}`, undefined, user.id );
     }
   };
   
@@ -316,9 +323,10 @@ export default function QuestionGeneratorPage() {
       if (error) throw error;
       setSavedIndividualQuestions(prev => prev.filter(q => q.id !== questionId));
       toast({title: "Question Deleted", description: "Saved question removed."});
-      logActivity("Saved Question Delete", `Deleted saved question ID: ${questionId}`, { userId: user.id });
+      logActivity("Saved Question Delete", `Deleted saved question ID: ${questionId}`, undefined, user.id);
     } catch (error) {
       toast({variant: "destructive", title: "Delete Failed", description: (error as Error).message});
+      logActivity("Error", `Failed to delete saved question: ${(error as Error).message}`, {userId: user.id, questionId});
     }
   };
 
@@ -328,7 +336,7 @@ export default function QuestionGeneratorPage() {
       .then(() => {
         toast({ title: "Question Copied!", description: "Question text copied to clipboard." });
         if (user) {
-            logActivity("Question Action", "Question text copied.", { length: questionText.length, userId: user.id });
+            logActivity("Question Action", "Question text copied.", { length: questionText.length }, user.id);
         }
       })
       .catch(err => {
@@ -343,7 +351,7 @@ export default function QuestionGeneratorPage() {
      setQuestionToExplain(qText);
      setDetailedExplanation(null);
      setIsExplanationDialogOpen(true);
-     if(user) logActivity("Question Explanation", `Requested explanation for: "${qText.substring(0,50)}..."`, {userId: user.id});
+     if(user) logActivity("Question Explanation", `Requested explanation for: "${qText.substring(0,50)}..."`, undefined, user.id);
      try {
         const input: ExplainQuestionInput = { question: qText };
         const output: ExplainQuestionOutput = await explainQuestion(input);
@@ -353,7 +361,7 @@ export default function QuestionGeneratorPage() {
         const errorMessage = err instanceof Error ? err.message : "Unknown error explaining question.";
         setDetailedExplanation(`Failed to get detailed explanation: ${errorMessage}`);
         toast({ variant: "destructive", title: "Explanation Error", description: errorMessage});
-        if(user) logActivity("Explanation Error", `Failed to explain: "${qText.substring(0,50)}..."`, { error: errorMessage, userId: user.id });
+        if(user) logActivity("Explanation Error", `Failed to explain: "${qText.substring(0,50)}..."`, { error: errorMessage }, user.id);
      } finally {
         setIsExplaining(false);
      }
@@ -493,14 +501,14 @@ export default function QuestionGeneratorPage() {
         </div>
          <Dialog open={isSavedQuestionsDialogOpen} onOpenChange={setIsSavedQuestionsDialogOpen}>
           <DialogTrigger asChild>
-            <Button variant="outline" onClick={() => setIsSavedQuestionsDialogOpen(true)}>
+            <Button variant="outline" onClick={() => setIsSavedQuestionsDialogOpen(true)} disabled={!user}>
               <ListChecks className="mr-2 h-4 w-4"/> View Saved Questions ({savedIndividualQuestions.length})
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Saved Individual Questions</DialogTitle>
-              <DialogDescription>Review questions you've saved to your account.</DialogDescription>
+              <DialogDescription>Review questions you've saved to your account. Showing latest {SAVED_QUESTIONS_FETCH_LIMIT}.</DialogDescription>
             </DialogHeader>
             <ScrollArea className="max-h-[60vh] p-1 mt-2">
               {isFetchingSavedQuestions ? (
@@ -539,7 +547,7 @@ export default function QuestionGeneratorPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="class-select">Class</Label>
-                <Select value={selectedClass} onValueChange={setSelectedClass} disabled={isLoadingQuestion}>
+                <Select value={selectedClass} onValueChange={setSelectedClass} disabled={isLoadingQuestion || !user}>
                   <SelectTrigger id="class-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="11">Class 11</SelectItem>
@@ -549,7 +557,7 @@ export default function QuestionGeneratorPage() {
               </div>
               <div>
                 <Label htmlFor="subject-select">Subject</Label>
-                <Select value={subject} onValueChange={(value) => { setSubject(value); }} disabled={isLoadingQuestion}>
+                <Select value={subject} onValueChange={(value) => { setSubject(value); }} disabled={isLoadingQuestion || !user}>
                   <SelectTrigger id="subject-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="physics">Physics</SelectItem>
@@ -560,7 +568,7 @@ export default function QuestionGeneratorPage() {
               </div>
               <div>
                 <Label htmlFor="topic-select">Topic</Label>
-                <Select value={topic} onValueChange={setTopic} disabled={isLoadingQuestion || !subject || topicsBySubject[subject]?.length === 0}>
+                <Select value={topic} onValueChange={setTopic} disabled={isLoadingQuestion || !subject || topicsBySubject[subject]?.length === 0 || !user}>
                   <SelectTrigger id="topic-select">
                     <SelectValue placeholder={!subject ? "Select Subject First" : (topicsBySubject[subject]?.length > 0 ? "Select Topic" : "No topics for subject")} />
                   </SelectTrigger>
@@ -573,7 +581,7 @@ export default function QuestionGeneratorPage() {
               </div>
               <div>
                 <Label htmlFor="source-select">Question Source</Label>
-                <Select value={source} onValueChange={setSource} disabled={isLoadingQuestion}>
+                <Select value={source} onValueChange={setSource} disabled={isLoadingQuestion || !user}>
                   <SelectTrigger id="source-select"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ncert">NCERT</SelectItem>
@@ -585,7 +593,7 @@ export default function QuestionGeneratorPage() {
               </div>
               <div>
                 <Label htmlFor="difficulty-select">Difficulty</Label>
-                <Select value={difficulty} onValueChange={(value) => setDifficulty(value as 'easy' | 'medium' | 'hard' | 'any')} disabled={isLoadingQuestion}>
+                <Select value={difficulty} onValueChange={(value) => setDifficulty(value as 'easy' | 'medium' | 'hard' | 'any')} disabled={isLoadingQuestion || !user}>
                   <SelectTrigger id="difficulty-select"><SelectValue placeholder="Any Difficulty" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="any">Any Difficulty</SelectItem>
@@ -604,7 +612,7 @@ export default function QuestionGeneratorPage() {
                     onChange={(e) => setNumberOfQuestions(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
                     min="1" 
                     max="50"
-                    disabled={isLoadingQuestion} />
+                    disabled={isLoadingQuestion || !user} />
               </div>
             </div>
              {overallError && (
@@ -614,7 +622,7 @@ export default function QuestionGeneratorPage() {
               </Alert>
             )}
             <Button className="w-full mt-6" onClick={handleStartQuiz} disabled={isLoadingQuestion || !topic || numberOfQuestions < 1 || !user}>
-              <PlayCircle className="mr-2 h-5 w-5" />
+              {isLoadingQuestion ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <PlayCircle className="mr-2 h-5 w-5" />}
               Start Quiz
             </Button>
           </CardContent>
@@ -633,6 +641,9 @@ export default function QuestionGeneratorPage() {
                 {!isExplaining && !detailedExplanation && <p>No explanation available or error occurred.</p>}
                 </div>
             </ScrollArea>
+             <DialogFooter>
+                <DialogClose asChild><Button type="button" variant="outline">Close</Button></DialogClose>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -668,4 +679,3 @@ export default function QuestionGeneratorPage() {
     </div>
   );
 }
-    

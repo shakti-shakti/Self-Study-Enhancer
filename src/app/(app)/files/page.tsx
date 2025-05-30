@@ -31,9 +31,10 @@ interface AppFile {
   original_upload_date?: string; // ISO Date string
   ai_hint?: string;
   created_at?: string;
-  // For client-side preview only, not stored in DB directly for this simple metadata model
   local_preview_url?: string; 
 }
+
+const FILES_FETCH_LIMIT = 50;
 
 function getFileType(fileName: string): AppFile['file_type'] {
   const extension = fileName.split('.').pop()?.toLowerCase();
@@ -57,22 +58,27 @@ export default function FilesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<AppFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
-  const [isUploading, setIsUploading] = useState(false); // For mock upload indication
+  const [isUploading, setIsUploading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
   const fetchFiles = async () => {
-    if (!user) return;
+    if (!user) {
+        setIsLoadingFiles(false);
+        return;
+    }
     setIsLoadingFiles(true);
     try {
       const { data, error } = await supabase
         .from('user_files')
         .select('*')
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(FILES_FETCH_LIMIT);
       if (error) throw error;
       setFiles(data || []);
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching Files", description: (error as Error).message });
+      logActivity("Error", "Failed to fetch files list", { userId: user.id, error: (error as Error).message });
     } finally {
       setIsLoadingFiles(false);
     }
@@ -81,6 +87,9 @@ export default function FilesPage() {
   useEffect(() => {
     if (user && !authLoading) {
       fetchFiles();
+    } else if (!authLoading && !user) {
+        setIsLoadingFiles(false);
+        setFiles([]); // Clear files if user logs out
     }
   }, [user, authLoading]);
 
@@ -105,8 +114,6 @@ export default function FilesPage() {
           original_upload_date: new Date().toISOString().split('T')[0],
           ai_hint: file.type.startsWith('image/') ? 'uploaded image' : 'document file',
         };
-        // In a real scenario, you would upload to Supabase Storage here and store the path/URL.
-        // For now, we just save metadata.
         return supabase.from('user_files').insert(fileData).select().single();
       });
 
@@ -114,7 +121,6 @@ export default function FilesPage() {
         const results = await Promise.all(filesToUploadPromises);
         const newDbFiles: AppFile[] = results.map(res => res.data).filter(Boolean) as AppFile[];
         
-        // For client-side preview of newly selected images
         const clientSidePreviews: Partial<Record<string, string>> = {};
         Array.from(selectedFiles).forEach((file, index) => {
             if(newDbFiles[index] && file.type.startsWith('image/')) {
@@ -122,15 +128,16 @@ export default function FilesPage() {
             }
         });
 
-        setFiles(prevFiles => [...newDbFiles.map(dbFile => ({...dbFile, local_preview_url: clientSidePreviews[dbFile.id]})), ...prevFiles]);
+        setFiles(prevFiles => [...newDbFiles.map(dbFile => ({...dbFile, local_preview_url: clientSidePreviews[dbFile.id]})), ...prevFiles].slice(0, FILES_FETCH_LIMIT));
 
         toast({
           title: `${newDbFiles.length} File(s) Added`,
           description: `${newDbFiles.map(f => f.file_name).join(', ')} added to your list.`,
         });
-        logActivity("File Add", `${newDbFiles.length} file(s) metadata added`, { names: newDbFiles.map(f => f.file_name), userId: user.id });
+        logActivity("File Add", `${newDbFiles.length} file(s) metadata added`, { names: newDbFiles.map(f => f.file_name)}, user.id);
       } catch (error) {
         toast({ variant: "destructive", title: "Error Adding Files", description: (error as Error).message });
+        logActivity("Error", `Error adding files: ${(error as Error).message}`, {userId: user.id});
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
@@ -145,7 +152,6 @@ export default function FilesPage() {
     const fileToDelete = files.find(f => f.id === fileId);
     if (!fileToDelete) return;
 
-    // Revoke local preview URL if it exists
     if (fileToDelete.local_preview_url) {
       URL.revokeObjectURL(fileToDelete.local_preview_url);
     }
@@ -164,26 +170,23 @@ export default function FilesPage() {
             description: `"${fileToDelete.file_name}" has been removed from your list.`,
             variant: "destructive"
         });
-        logActivity("File Delete", `File metadata removed: "${fileToDelete.file_name}"`, { fileId, userId: user.id });
+        logActivity("File Delete", `File metadata removed: "${fileToDelete.file_name}"`, { fileId }, user.id);
     } catch (error) {
         toast({ variant: "destructive", title: "Error Removing File", description: (error as Error).message });
+        logActivity("Error", `Error removing file metadata: ${(error as Error).message}`, {userId: user.id, fileId});
     }
   };
 
   const handleOpenFile = (file: AppFile) => {
-    // Actual file opening depends on having the file content or a direct URL.
-    // Since we only store metadata (and not actual files in Supabase Storage yet),
-    // this remains a placeholder action.
-    // If file.local_preview_url exists (for recently selected images), we can open that.
     if (file.file_type === 'image' && file.local_preview_url) {
         window.open(file.local_preview_url, '_blank');
-        logActivity("File Open Preview", `Opened local image preview: ${file.file_name}`, {userId: user?.id});
+        if (user) logActivity("File Open Preview", `Opened local image preview: ${file.file_name}`, undefined, user.id);
     } else {
         toast({
             title: "Open File (Info)", 
             description: `This app stores file references. To open "${file.file_name}", you'd typically use a download link if it were stored in cloud storage. For now, only image previews from new selections are directly viewable.`
         });
-        logActivity("File Open Action", `File open action (info): ${file.file_name}`, {userId: user?.id});
+        if (user) logActivity("File Open Action", `File open action (info): ${file.file_name}`, undefined, user.id);
     }
   };
 
@@ -219,7 +222,7 @@ export default function FilesPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Study Materials</CardTitle>
-          <CardDescription>Add references to your notes, images, and resources. File metadata is saved to your account.</CardDescription>
+          <CardDescription>Add references to your notes, images, and resources. File metadata is saved to your account. Showing latest {FILES_FETCH_LIMIT}.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center space-x-2 mb-6">
@@ -250,7 +253,7 @@ export default function FilesPage() {
                          className="rounded object-cover h-16 w-16 border bg-muted"
                          onError={(e) => { e.currentTarget.src = 'https://placehold.co/64x64.png?text=Err'; }}
                        />
-                    ) : file.file_type === 'image' ? ( // Placeholder if no local_preview_url (e.g. fetched from DB without blob)
+                    ) : file.file_type === 'image' ? ( 
                        <ImageIcon className="h-10 w-10 text-blue-500 flex-shrink-0 mt-1" />
                     ) : file.file_type === 'pdf' ? (
                       <FileText className="h-10 w-10 text-destructive flex-shrink-0 mt-1" />
@@ -261,7 +264,7 @@ export default function FilesPage() {
                     )}
                     <div className="overflow-hidden flex-1">
                       <p className="font-semibold truncate text-sm" title={file.file_name}>{file.file_name}</p>
-                      <p className="text-xs text-muted-foreground">{file.file_size_text} - {file.original_upload_date ? new Date(file.original_upload_date).toLocaleDateString() : new Date(file.created_at!).toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground">{file.file_size_text} - {file.original_upload_date ? new Date(file.original_upload_date).toLocaleDateString() : (file.created_at ? new Date(file.created_at).toLocaleDateString() : 'N/A')}</p>
                       <Button variant="link" size="sm" className="p-0 h-auto mt-1 text-xs" onClick={() => handleOpenFile(file)}>
                         <ExternalLink className="mr-1 h-3 w-3"/>Open/Preview Info
                       </Button>
@@ -305,4 +308,3 @@ export default function FilesPage() {
     </div>
   );
 }
-    

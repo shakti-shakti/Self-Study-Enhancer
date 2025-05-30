@@ -29,12 +29,13 @@ interface YearlyPlanItem {
   type: 'goal' | 'syllabus_milestone' | 'revision_block';
   title: string;
   details?: string;
-  target_date?: string; // Optional target date or month, e.g., "2024-Q3" or "2024-10"
+  target_date?: string; 
   created_at?: string;
   updated_at?: string;
 }
 
 const itemTypes: YearlyPlanItem['type'][] = ['goal', 'syllabus_milestone', 'revision_block'];
+const YEARLY_ITEMS_FETCH_LIMIT = 100;
 
 export default function YearPlannerPage() {
   const { toast } = useToast();
@@ -52,14 +53,18 @@ export default function YearPlannerPage() {
   const [yearlyPlanItems, setYearlyPlanItems] = useState<YearlyPlanItem[]>([]); 
 
   const fetchItems = async () => {
-    if (!user) return;
+    if (!user) {
+        setIsLoadingItems(false);
+        return;
+    }
     setIsLoadingItems(true);
     try {
       const { data, error } = await supabase
         .from('yearly_plan_items')
         .select('*')
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false }); // Or by target_date if preferred
+        .order('created_at', { ascending: false })
+        .limit(YEARLY_ITEMS_FETCH_LIMIT);
 
       if (error) throw error;
       setYearlyPlanItems(data || []);
@@ -74,6 +79,9 @@ export default function YearPlannerPage() {
   useEffect(() => {
     if (user && !authLoading) {
       fetchItems();
+    } else if (!authLoading && !user) {
+        setIsLoadingItems(false);
+        setYearlyPlanItems([]);
     }
   }, [user, authLoading]);
 
@@ -158,7 +166,7 @@ export default function YearPlannerPage() {
       if (error) throw error;
       toast({variant: "destructive", title: "Item Deleted", description: `Item "${itemToDelete.title}" removed.`});
       logActivity("Year Planner", `Item deleted: "${itemToDelete.title}"`, { itemId }, user.id);
-      fetchItems(); // Refresh list
+      fetchItems(); 
     } catch (error) {
       toast({variant: "destructive", title: "Error Deleting Item", description: (error as Error).message});
       logActivity("Year Planner Error", "Failed to delete item", { error: (error as Error).message, itemId }, user.id);
@@ -230,7 +238,7 @@ export default function YearPlannerPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Long-Term Academic Plan</CardTitle>
-          <CardDescription>Set goals, track syllabus progress, and schedule revisions for the year. Data is saved to your account.</CardDescription>
+          <CardDescription>Set goals, track syllabus progress, and schedule revisions for the year. Data is saved to your account. Showing latest {YEARLY_ITEMS_FETCH_LIMIT}.</CardDescription>
         </CardHeader>
         <CardContent>
            {isLoadingItems ? (
@@ -267,4 +275,3 @@ export default function YearPlannerPage() {
     </div>
   );
 }
-    
