@@ -1,8 +1,8 @@
 
 "use client";
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
-import { UploadCloud, FileText, ImageIcon, FolderOpen, Search, Trash2, ExternalLink, Loader2 } from "lucide-react";
+import { UploadCloud, FileText, ImageIcon, FolderOpen, Search, Trash2, ExternalLink, Loader2, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Image from "next/image";
@@ -21,20 +21,23 @@ import {
 import { logActivity } from '@/lib/activity-logger';
 import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabaseClient';
+import { Progress } from '@/components/ui/progress';
 
 interface AppFile {
-  id: string; // Supabase UUID
+  id: string; 
   user_id: string;
   file_name: string;
   file_type: "pdf" | "image" | "doc" | "unknown";
   file_size_text: string;
-  original_upload_date?: string; // ISO Date string
+  original_upload_date?: string;
   ai_hint?: string;
   created_at?: string;
-  local_preview_url?: string; 
+  storage_path?: string | null; // Path in Supabase Storage
+  local_preview_url?: string; // For client-side image previews before/during upload
 }
 
 const FILES_FETCH_LIMIT = 50;
+const STORAGE_BUCKET_NAME = 'user_uploads'; // Define your bucket name
 
 function getFileType(fileName: string): AppFile['file_type'] {
   const extension = fileName.split('.').pop()?.toLowerCase();
@@ -59,12 +62,14 @@ export default function FilesPage() {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({}); //fileName: progress
   const [searchTerm, setSearchTerm] = useState('');
 
-  const fetchFiles = async () => {
+  const fetchFiles = useCallback(async () => {
     if (!user) {
-        setIsLoadingFiles(false);
-        return;
+      setFiles([]);
+      setIsLoadingFiles(false);
+      return;
     }
     setIsLoadingFiles(true);
     try {
@@ -77,119 +82,176 @@ export default function FilesPage() {
       if (error) throw error;
       setFiles(data || []);
     } catch (error) {
-      toast({ variant: "destructive", title: "Error Fetching Files", description: (error as Error).message });
-      logActivity("Error", "Failed to fetch files list", { userId: user.id, error: (error as Error).message });
+      toast({ variant: "destructive", title: "Error Fetching Files List", description: (error as Error).message });
+      logActivity("Error", "Failed to fetch files list", { error: (error as Error).message });
     } finally {
       setIsLoadingFiles(false);
     }
-  };
+  }, [user, toast]);
 
   useEffect(() => {
-    if (user && !authLoading) {
+    if (!authLoading && user) {
       fetchFiles();
     } else if (!authLoading && !user) {
-        setIsLoadingFiles(false);
-        setFiles([]); // Clear files if user logs out
+      setIsLoadingFiles(false);
+      setFiles([]);
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, fetchFiles]);
 
   const handleUploadClick = () => {
+    if (!user) {
+        toast({variant: "destructive", title: "Not Logged In", description: "Please log in to upload files."});
+        return;
+    }
     fileInputRef.current?.click();
   };
 
   const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (!user) {
-        toast({variant: "destructive", title: "Not Logged In", description: "Please log in to add files."});
-        return;
-    }
+    if (!user) return;
     const selectedFiles = event.target.files;
-    if (selectedFiles && selectedFiles.length > 0) {
-      setIsUploading(true);
-      const filesToUploadPromises = Array.from(selectedFiles).map(file => {
-        const fileData = {
+    if (!selectedFiles || selectedFiles.length === 0) return;
+
+    setIsUploading(true);
+    setUploadProgress({});
+    let allUploadsSuccessful = true;
+
+    const uploadPromises = Array.from(selectedFiles).map(async (file) => {
+      const fileNameForProgress = file.name; // Use original file name for progress tracking
+      setUploadProgress(prev => ({ ...prev, [fileNameForProgress]: 0 }));
+      
+      // Sanitize file name for storage path, make it unique
+      const sanitizedBaseName = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fileExt = file.name.split('.').pop() || 'bin';
+      const uniqueFileNameForStorage = `${sanitizedBaseName}_${Date.now()}.${fileExt}`;
+      const filePath = `${user.id}/${uniqueFileNameForStorage}`;
+
+      try {
+        // Upload to Supabase Storage
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from(STORAGE_BUCKET_NAME)
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: false, // true if you want to overwrite if same path exists
+            contentType: file.type,
+          });
+
+        if (uploadError) {
+          console.error('Supabase Storage Upload Error:', uploadError);
+          throw uploadError;
+        }
+
+        // If upload successful, insert metadata into 'user_files' table
+        const fileMetadata: Omit<AppFile, 'id' | 'created_at' | 'local_preview_url'> = {
           user_id: user.id,
-          file_name: file.name,
+          file_name: file.name, // Store original file name
           file_type: getFileType(file.name),
           file_size_text: formatFileSize(file.size),
           original_upload_date: new Date().toISOString().split('T')[0],
           ai_hint: file.type.startsWith('image/') ? 'uploaded image' : 'document file',
+          storage_path: filePath, // Store the path in Supabase Storage
         };
-        return supabase.from('user_files').insert(fileData).select().single();
-      });
 
-      try {
-        const results = await Promise.all(filesToUploadPromises);
-        const newDbFiles: AppFile[] = results.map(res => res.data).filter(Boolean) as AppFile[];
-        
-        const clientSidePreviews: Partial<Record<string, string>> = {};
-        Array.from(selectedFiles).forEach((file, index) => {
-            if(newDbFiles[index] && file.type.startsWith('image/')) {
-                clientSidePreviews[newDbFiles[index].id] = URL.createObjectURL(file);
-            }
-        });
+        const { data: dbData, error: dbError } = await supabase
+          .from('user_files')
+          .insert(fileMetadata)
+          .select()
+          .single();
 
-        setFiles(prevFiles => [...newDbFiles.map(dbFile => ({...dbFile, local_preview_url: clientSidePreviews[dbFile.id]})), ...prevFiles].slice(0, FILES_FETCH_LIMIT));
-
-        toast({
-          title: `${newDbFiles.length} File(s) Added`,
-          description: `${newDbFiles.map(f => f.file_name).join(', ')} added to your list.`,
-        });
-        logActivity("File Add", `${newDbFiles.length} file(s) metadata added`, { names: newDbFiles.map(f => f.file_name)}, user.id);
-      } catch (error) {
-        toast({ variant: "destructive", title: "Error Adding Files", description: (error as Error).message });
-        logActivity("Error", `Error adding files: ${(error as Error).message}`, {userId: user.id});
-      } finally {
-        setIsUploading(false);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = ""; 
+        if (dbError) {
+          // If DB insert fails, try to delete the orphaned file from storage
+          console.error('Supabase DB Insert Error after upload:', dbError);
+          await supabase.storage.from(STORAGE_BUCKET_NAME).remove([filePath]);
+          throw dbError;
         }
+        setUploadProgress(prev => ({ ...prev, [fileNameForProgress]: 100 }));
+        return dbData as AppFile;
+      } catch (err) {
+        allUploadsSuccessful = false;
+        const errorMessage = err instanceof Error ? err.message : 'Unknown upload error';
+        toast({ variant: "destructive", title: `Error Uploading ${file.name}`, description: errorMessage });
+        logActivity("File Upload Error", `Failed to upload ${file.name}: ${errorMessage}`);
+        setUploadProgress(prev => ({ ...prev, [fileNameForProgress]: -1 })); // -1 for error
+        return null;
       }
+    });
+
+    const results = await Promise.all(uploadPromises);
+    const successfulDbFiles = results.filter(Boolean) as AppFile[];
+
+    if (successfulDbFiles.length > 0) {
+      fetchFiles(); // Refresh the list from DB
+      toast({
+        title: `${successfulDbFiles.length} File(s) Uploaded Successfully`,
+        description: `${successfulDbFiles.map(f => f.file_name).join(', ')} stored.`,
+      });
+      logActivity("File Upload", `${successfulDbFiles.length} file(s) uploaded and metadata saved.`, { names: successfulDbFiles.map(f => f.file_name) });
+    }
+    if (!allUploadsSuccessful && selectedFiles.length > successfulDbFiles.length) {
+        toast({variant: "warning", title: "Some Uploads Failed", description: "Check individual error messages if any, or try again."});
+    }
+
+    setIsUploading(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""; 
     }
   };
   
-  const handleDeleteFile = async (fileId: string) => {
-    if (!user) return;
-    const fileToDelete = files.find(f => f.id === fileId);
-    if (!fileToDelete) return;
+  const handleDeleteFile = async (fileToDelete: AppFile) => {
+    if (!user || !fileToDelete.id) return;
 
-    if (fileToDelete.local_preview_url) {
-      URL.revokeObjectURL(fileToDelete.local_preview_url);
-    }
+    const originalFiles = files;
+    setFiles(prevFiles => prevFiles.filter(f => f.id !== fileToDelete.id));
 
     try {
-        const { error } = await supabase
-            .from('user_files')
-            .delete()
-            .eq('id', fileId)
-            .eq('user_id', user.id);
-        if (error) throw error;
-        
-        setFiles(prevFiles => prevFiles.filter(f => f.id !== fileId));
-        toast({
-            title: "File Removed",
-            description: `"${fileToDelete.file_name}" has been removed from your list.`,
-            variant: "destructive"
-        });
-        logActivity("File Delete", `File metadata removed: "${fileToDelete.file_name}"`, { fileId }, user.id);
+      const { error: dbError } = await supabase
+        .from('user_files')
+        .delete()
+        .eq('id', fileToDelete.id)
+        .eq('user_id', user.id);
+      if (dbError) throw dbError;
+
+      if (fileToDelete.storage_path) {
+        const { error: storageError } = await supabase.storage
+          .from(STORAGE_BUCKET_NAME)
+          .remove([fileToDelete.storage_path]);
+        if (storageError) {
+          console.error("Error deleting file from storage, but DB entry removed:", storageError);
+          toast({ variant: "warning", title: "Storage Deletion Issue", description: `Could not remove ${fileToDelete.file_name} from storage. DB entry removed. Error: ${storageError.message}` });
+        }
+      }
+      
+      toast({ title: "File Removed", description: `"${fileToDelete.file_name}" has been removed.` });
+      logActivity("File Delete", `File removed: "${fileToDelete.file_name}"`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path });
     } catch (error) {
-        toast({ variant: "destructive", title: "Error Removing File", description: (error as Error).message });
-        logActivity("Error", `Error removing file metadata: ${(error as Error).message}`, {userId: user.id, fileId});
+      setFiles(originalFiles); 
+      toast({ variant: "destructive", title: "Error Removing File", description: (error as Error).message });
+      logActivity("Error", `Error removing file: ${(error as Error).message}`, { fileId: fileToDelete.id });
     }
   };
 
-  const handleOpenFile = (file: AppFile) => {
-    if (file.file_type === 'image' && file.local_preview_url) {
-        window.open(file.local_preview_url, '_blank');
-        if (user) logActivity("File Open Preview", `Opened local image preview: ${file.file_name}`, undefined, user.id);
-    } else {
-        toast({
-            title: "Open File (Info)", 
-            description: `This app stores file references. To open "${file.file_name}", you'd typically use a download link if it were stored in cloud storage. For now, only image previews from new selections are directly viewable.`
-        });
-        if (user) logActivity("File Open Action", `File open action (info): ${file.file_name}`, undefined, user.id);
+  const handleOpenFile = async (file: AppFile) => {
+    if (!file.storage_path) {
+      toast({ title: "File Not Stored Correctly", description: "This file does not have a valid storage path." });
+      return;
+    }
+    try {
+      const { data, error } = await supabase.storage
+        .from(STORAGE_BUCKET_NAME)
+        .createSignedUrl(file.storage_path, 60 * 5); // Signed URL valid for 5 minutes
+
+      if (error) throw error;
+      
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+        logActivity("File Open", `Opened file: ${file.file_name}`, { path: file.storage_path });
+      } else {
+        toast({ variant: "destructive", title: "Could not get file URL", description: "Unable to generate a link for this file." });
+      }
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Opening File", description: (error as Error).message });
+      logActivity("File Open Error", `Error opening file ${file.file_name}: ${(error as Error).message}`);
     }
   };
-
 
   const filteredFiles = files.filter(file => 
     file.file_name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -211,18 +273,50 @@ export default function FilesPage() {
       />
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <UploadCloud className="h-8 w-8 text-primary" />
+          <FolderOpen className="h-8 w-8 text-primary" />
           <h1 className="text-3xl font-bold tracking-tight">My Files &amp; Resources</h1>
         </div>
         <Button onClick={handleUploadClick} disabled={isUploading || !user}>
           {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <UploadCloud className="mr-2 h-4 w-4" />}
-          Add File(s)
+          Upload File(s)
         </Button>
       </div>
+       <Card>
+        <CardHeader>
+            <CardTitle>Storage Information</CardTitle>
+        </CardHeader>
+        <CardContent>
+            <p className="text-sm text-muted-foreground">
+                Files uploaded here are stored in your Supabase Storage bucket named <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">{STORAGE_BUCKET_NAME}</code>.
+                Ensure this bucket exists and has appropriate RLS policies for uploads (e.g., based on authenticated user ID in path <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">{"${user_id}/*"}</code>) and access (e.g., public read or signed URLs for viewing).
+                The SQL to add a `storage_path` column to your `user_files` table has been provided.
+            </p>
+        </CardContent>
+       </Card>
+      
+      {isUploading && Object.keys(uploadProgress).length > 0 && (
+        <Card className="mt-4">
+          <CardHeader><CardTitle>Upload Progress</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            {Object.entries(uploadProgress).map(([fileName, progress]) => (
+              <div key={fileName}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="truncate max-w-[70%]">{fileName}</span>
+                  {progress === -1 ? <span className="text-destructive">Error</span> : 
+                   progress === 100 ? <CheckCircle className="h-5 w-5 text-green-500"/> : 
+                   <span className="text-muted-foreground">{progress}%</span>}
+                </div>
+                {progress >= 0 && <Progress value={progress} className="h-2" />}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="shadow-lg">
         <CardHeader>
-          <CardTitle>Your Study Materials</CardTitle>
-          <CardDescription>Add references to your notes, images, and resources. File metadata is saved to your account. Showing latest {FILES_FETCH_LIMIT}.</CardDescription>
+          <CardTitle>Your Uploaded Materials</CardTitle>
+          <CardDescription>Manage your uploaded files. Showing latest {FILES_FETCH_LIMIT}.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center space-x-2 mb-6">
@@ -239,24 +333,20 @@ export default function FilesPage() {
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
+          ) : !user ? (
+             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center text-center">
+                 <FolderOpen className="h-16 w-16 text-muted-foreground mb-4"/>
+                <p className="text-muted-foreground">Please log in to manage your files.</p>
+             </div>
           ) : filteredFiles.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredFiles.map(file => (
                 <Card key={file.id} className="hover:shadow-md transition-shadow flex flex-col bg-card/80">
                   <CardContent className="p-4 flex items-start space-x-3 flex-1">
-                    {file.file_type === 'image' && file.local_preview_url ? (
-                       <Image 
-                         src={file.local_preview_url} 
-                         alt={file.file_name} 
-                         data-ai-hint={file.ai_hint || "document placeholder"} 
-                         width={64} height={64} 
-                         className="rounded object-cover h-16 w-16 border bg-muted"
-                         onError={(e) => { e.currentTarget.src = 'https://placehold.co/64x64.png?text=Err'; }}
-                       />
-                    ) : file.file_type === 'image' ? ( 
+                    {file.file_type === 'image' ? (
                        <ImageIcon className="h-10 w-10 text-blue-500 flex-shrink-0 mt-1" />
                     ) : file.file_type === 'pdf' ? (
-                      <FileText className="h-10 w-10 text-destructive flex-shrink-0 mt-1" />
+                      <FileText className="h-10 w-10 text-red-500 flex-shrink-0 mt-1" />
                     ) : file.file_type === 'doc' ? (
                       <FileText className="h-10 w-10 text-blue-500 flex-shrink-0 mt-1" />
                     ) : (
@@ -265,8 +355,8 @@ export default function FilesPage() {
                     <div className="overflow-hidden flex-1">
                       <p className="font-semibold truncate text-sm" title={file.file_name}>{file.file_name}</p>
                       <p className="text-xs text-muted-foreground">{file.file_size_text} - {file.original_upload_date ? new Date(file.original_upload_date).toLocaleDateString() : (file.created_at ? new Date(file.created_at).toLocaleDateString() : 'N/A')}</p>
-                      <Button variant="link" size="sm" className="p-0 h-auto mt-1 text-xs" onClick={() => handleOpenFile(file)}>
-                        <ExternalLink className="mr-1 h-3 w-3"/>Open/Preview Info
+                      <Button variant="link" size="sm" className="p-0 h-auto mt-1 text-xs" onClick={() => handleOpenFile(file)} disabled={!file.storage_path}>
+                        <ExternalLink className="mr-1 h-3 w-3"/>Open File
                       </Button>
                     </div>
                   </CardContent>
@@ -281,12 +371,12 @@ export default function FilesPage() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            This will remove the file reference for "{file.file_name}" from your account. This action cannot be undone.
+                            This will remove "{file.file_name}" from your list and delete it from storage. This action cannot be undone.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
                           <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={() => handleDeleteFile(file.id)} className="bg-destructive hover:bg-destructive/90">
+                          <AlertDialogAction onClick={() => handleDeleteFile(file)} className="bg-destructive hover:bg-destructive/90">
                             Remove
                           </AlertDialogAction>
                         </AlertDialogFooter>
@@ -299,8 +389,8 @@ export default function FilesPage() {
           ) : (
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex flex-col items-center justify-center text-center">
               <FolderOpen className="h-16 w-16 text-muted-foreground mb-4"/>
-              <p className="text-muted-foreground">{searchTerm ? "No files match your search." : "No files added yet."}</p>
-              <p className="text-sm text-muted-foreground">Click "Add File(s)" to add references to your study materials.</p>
+              <p className="text-muted-foreground">{searchTerm ? "No files match your search." : "No files uploaded yet."}</p>
+              <p className="text-sm text-muted-foreground">Click "Upload File(s)" to add your study materials.</p>
             </div>
           )}
         </CardContent>

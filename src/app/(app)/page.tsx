@@ -7,8 +7,6 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-// TaskManagement component seems like a standalone localStorage example, consider integrating its purpose or removing if redundant
-// import TaskManagement from '@/components/TaskManagement'; 
 import {
   Dialog,
   DialogContent,
@@ -24,13 +22,13 @@ import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabaseClient';
 import { format, parseISO } from 'date-fns';
 
-const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore'; // This will be replaced by Supabase data eventually
-
 interface LastQuizScore {
   score: number;
   totalQuestions: number;
   accuracy: number;
-  timestamp: string;
+  quiz_timestamp: string; // from Supabase
+  subject?: string;
+  topic?: string;
 }
 
 interface CountdownConfig {
@@ -56,7 +54,8 @@ const syllabusFacts = [
 export default function DashboardPage() {
   const { toast } = useToast();
   const { user, isLoading: authLoading } = useAuth();
-  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null); // Still from localStorage for now
+  const [lastQuizScore, setLastQuizScore] = useState<LastQuizScore | null>(null);
+  const [isLoadingQuizScore, setIsLoadingQuizScore] = useState(true);
   const [randomFact, setRandomFact] = useState(syllabusFacts[0]);
 
   const [countdownConfig, setCountdownConfig] = useState<CountdownConfig | null>(null);
@@ -69,22 +68,24 @@ export default function DashboardPage() {
 
   const getDefaultNeetDate = useCallback(() => {
       const today = new Date();
-      let nextMay = new Date(today.getFullYear(), 4, 5); 
-      if (today.getMonth() > 4 || (today.getMonth() === 4 && today.getDate() > 5)) { // If past May 5th
+      let nextMay = new Date(today.getFullYear(), 4, 5); // May is month 4 (0-indexed)
+      if (today.getMonth() > 4 || (today.getMonth() === 4 && today.getDate() > 5)) {
         nextMay.setFullYear(today.getFullYear() + 1);
       }
       return format(nextMay, 'yyyy-MM-dd');
   }, []);
 
   const fetchCountdownConfig = useCallback(async () => {
-    if (!user) {
+    if (!user) { // Fallback to localStorage if not logged in
         setIsLoadingCountdown(false);
         const localConfig = localStorage.getItem('dashboardCountdownConfig');
         if (localConfig) {
-            const parsedConfig = JSON.parse(localConfig) as CountdownConfig;
-            setCountdownConfig(parsedConfig);
-            setTempEventName(parsedConfig.eventName);
-            setTempEventDate(parsedConfig.eventDate);
+            try {
+                const parsedConfig = JSON.parse(localConfig) as CountdownConfig;
+                setCountdownConfig(parsedConfig);
+                setTempEventName(parsedConfig.eventName);
+                setTempEventDate(parsedConfig.eventDate);
+            } catch { /* ignore parse error, use default */ }
         } else {
             const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
             setCountdownConfig(defaultConfig);
@@ -101,13 +102,14 @@ export default function DashboardPage() {
         .eq('user_id', user.id)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error; 
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116: single row not found
 
       if (data && data.countdown_event_name && data.countdown_event_date) {
-        setCountdownConfig({ eventName: data.countdown_event_name, eventDate: data.countdown_event_date });
-        setTempEventName(data.countdown_event_name);
-        setTempEventDate(data.countdown_event_date);
-      } else {
+        const config = { eventName: data.countdown_event_name, eventDate: format(parseISO(data.countdown_event_date), 'yyyy-MM-dd') };
+        setCountdownConfig(config);
+        setTempEventName(config.eventName);
+        setTempEventDate(config.eventDate);
+      } else { // No config found in DB, set default and save it
         const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
         setCountdownConfig(defaultConfig);
         setTempEventName(defaultConfig.eventName);
@@ -118,7 +120,7 @@ export default function DashboardPage() {
             .upsert({ 
                 user_id: user.id, 
                 countdown_event_name: defaultConfig.eventName, 
-                countdown_event_date: defaultConfig.eventDate,
+                countdown_event_date: defaultConfig.eventDate, // Ensure this is just date part
                 updated_at: new Date().toISOString()
             }, { onConflict: 'user_id' });
         if(upsertError) console.error("Error saving default countdown to Supabase:", upsertError);
@@ -129,29 +131,57 @@ export default function DashboardPage() {
       setCountdownConfig(defaultConfig); 
       setTempEventName(defaultConfig.eventName);
       setTempEventDate(defaultConfig.eventDate);
+      localStorage.setItem('dashboardCountdownConfig', JSON.stringify(defaultConfig)); // Fallback
     } finally {
       setIsLoadingCountdown(false);
     }
   }, [user, getDefaultNeetDate]);
   
+  const fetchLastQuizScore = useCallback(async () => {
+    if (!user) {
+      setIsLoadingQuizScore(false);
+      setLastQuizScore(null); // Clear if no user
+      return;
+    }
+    setIsLoadingQuizScore(true);
+    try {
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('score, total_questions, accuracy, quiz_timestamp, subject, topic')
+        .eq('user_id', user.id)
+        .order('quiz_timestamp', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      setLastQuizScore(data as LastQuizScore | null);
+    } catch (err) {
+      console.error("Error fetching last quiz score from Supabase:", err);
+      setLastQuizScore(null);
+    } finally {
+      setIsLoadingQuizScore(false);
+    }
+  }, [user]);
+
 
   useEffect(() => {
-    const storedScore = localStorage.getItem(LAST_QUIZ_SCORE_KEY);
-    if (storedScore) setLastQuizScore(JSON.parse(storedScore));
-    
     setRandomFact(syllabusFacts[Math.floor(Math.random() * syllabusFacts.length)]);
-
     if (!authLoading) {
       fetchCountdownConfig();
+      fetchLastQuizScore();
     }
-  }, [user, authLoading, fetchCountdownConfig]);
+  }, [user, authLoading, fetchCountdownConfig, fetchLastQuizScore]);
 
   useEffect(() => {
     if (!countdownConfig || !countdownConfig.eventDate) return;
 
     const calculateTimeLeft = () => {
-      const targetDate = new Date(countdownConfig.eventDate + "T00:00:00"); // Treat as local date for countdown
-      const difference = +targetDate - +new Date();
+      // Ensure eventDate is treated as a date without time for accurate daily countdown
+      const targetDateUTC = new Date(countdownConfig.eventDate + "T00:00:00Z"); // Assume UTC if no timezone
+      // For a more local feel, and to countdown to the start of that day in user's local timezone:
+      const targetDateLocal = new Date(countdownConfig.eventDate); // This will parse as local timezone at midnight
+      
+      const difference = +targetDateLocal - +new Date();
       let newTimeLeft = { days: 0, hours: 0, minutes: 0, seconds: 0 };
 
       if (difference > 0) {
@@ -179,13 +209,14 @@ export default function DashboardPage() {
     
     const newConfig: CountdownConfig = {
       eventName: tempEventName,
-      eventDate: tempEventDate,
+      eventDate: tempEventDate, // Ensure this is just date part 'yyyy-MM-dd'
     };
-    setCountdownConfig(newConfig); // Optimistic update for UI
+    
     setIsCountdownDialogOpen(false);
 
     if (!user) { // Save to localStorage if not logged in
         localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig));
+        setCountdownConfig(newConfig); // Update local state
         toast({ title: "Countdown Updated (Locally)", description: `Timer set for ${newConfig.eventName}.` });
         return;
     }
@@ -197,21 +228,25 @@ export default function DashboardPage() {
         .upsert({ 
           user_id: user.id, 
           countdown_event_name: newConfig.eventName, 
-          countdown_event_date: newConfig.eventDate,
+          countdown_event_date: newConfig.eventDate, // Ensure date format is compatible with Supabase DATE type
           updated_at: new Date().toISOString()
         }, { onConflict: 'user_id' });
       
       if (error) throw error;
-      toast({ title: "Countdown Updated (Supabase)", description: `Timer set for ${newConfig.eventName}.` });
+      setCountdownConfig(newConfig); // Update local state after successful save
+      toast({ title: "Countdown Updated", description: `Timer set for ${newConfig.eventName} and saved to your account.` });
+      logActivity("Dashboard Config", "Countdown timer updated", { eventName: newConfig.eventName, eventDate: newConfig.eventDate });
     } catch (err) {
-      toast({ variant: "destructive", title: "Error Saving Countdown to Supabase", description: (err as Error).message });
-      localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig)); // Fallback to local if Supabase fails
+      toast({ variant: "destructive", title: "Error Saving Countdown", description: (err as Error).message });
+      localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig)); // Fallback to local
+      setCountdownConfig(newConfig);
+      logActivity("Dashboard Error", "Failed to save countdown config", { error: (err as Error).message });
     } finally {
         setIsSubmittingCountdown(false);
     }
   };
   
-  if (authLoading && !user && isLoadingCountdown) { // Show loader if auth is loading and user isn't set yet
+  if (authLoading && !user && (isLoadingCountdown || isLoadingQuizScore)) {
     return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
 
@@ -295,11 +330,17 @@ export default function DashboardPage() {
             <CardTitle className="text-lg">Performance Snapshot</CardTitle>
           </CardHeader>
           <CardContent>
-            {lastQuizScore ? (
+            {isLoadingQuizScore ? (
+              <div className="space-y-2"> <Skeleton className="h-6 w-1/2"/> <Skeleton className="h-4 w-3/4"/></div>
+            ) : lastQuizScore ? (
               <div>
-                <p className="text-sm text-muted-foreground">Last Quiz ({new Date(lastQuizScore.timestamp).toLocaleDateString()}):</p>
+                <p className="text-sm text-muted-foreground">
+                  Last Quiz ({new Date(lastQuizScore.quiz_timestamp).toLocaleDateString()})
+                  {lastQuizScore.subject && ` - ${lastQuizScore.subject}`}
+                  {lastQuizScore.topic && ` (${lastQuizScore.topic})`}
+                </p>
                 <p className="text-2xl font-bold">{lastQuizScore.accuracy.toFixed(0)}% 
-                  <span className="text-sm font-normal text-muted-foreground"> ({lastQuizScore.score}/{lastQuizScore.totalQuestions} correct)</span>
+                  <span className="text-sm font-normal text-muted-foreground"> ({lastQuizScore.score}/{lastQuizScore.total_questions} correct)</span>
                 </p>
               </div>
             ) : (
