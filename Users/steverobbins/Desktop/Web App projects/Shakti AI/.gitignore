@@ -1,0 +1,69 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js build output
+/.next/
+/out/
+
+# Next.js static export output
+# /out/
+
+# Production
+/build
+
+# Various
+.DS_Store
+*.pem
+
+# Node Linter
+# /eslint-results.txt
+
+# Editor directories and files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment variables
+.env
+.env*.local
+.env*.production
+.env*.development
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Local user files
+# firebase-debug.log
+# firebase-debug.*.log
+
+# SQLite
+# *.sqlite3
+# *.sqlite3-journal
+
+# Expo specific
+/.expo/
+/android-app/.expo/
+/my-pwa-app/Self-Study-Enhancer/dist/ # PWA build output
+/my-pwa-app1/dist/ # Another PWA build output
+
+# Genkit related (if any local state is stored, adjust as needed)
+# .genkit/state/
+
+# Turbopack
+.turbo
