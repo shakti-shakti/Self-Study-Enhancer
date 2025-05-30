@@ -24,12 +24,13 @@ import {
   DialogTitle,
   DialogTrigger,
   DialogClose,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/lib/supabaseClient';
 
-const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore'; // Stays as localStorage for now
+const LAST_QUIZ_SCORE_KEY = 'neetPrepProLastQuizScore';
 const SAVED_QUESTIONS_FETCH_LIMIT = 50;
 
 interface QuestionWithAnswer extends GenerateRandomQuestionOutput {
@@ -38,11 +39,11 @@ interface QuestionWithAnswer extends GenerateRandomQuestionOutput {
   isCorrect?: boolean;
 }
 
-interface SavedQuestionSupabase { // Reflects the Supabase table structure
+interface SavedQuestionSupabase { 
   id: string; 
   user_id: string;
   question_text: string;
-  options: string[]; // Stored as JSONB in Supabase, parsed to string[] here
+  options: string[]; 
   correct_answer_index: number;
   explanation: string;
   subject?: string;
@@ -92,7 +93,14 @@ export default function QuestionGeneratorPage() {
 
   useEffect(() => {
     const storedScore = localStorage.getItem(LAST_QUIZ_SCORE_KEY);
-    if (storedScore) setLastQuizScore(JSON.parse(storedScore));
+    if (storedScore) {
+      try {
+        setLastQuizScore(JSON.parse(storedScore));
+      } catch (e) {
+        console.error("Error parsing last quiz score from localStorage", e);
+        localStorage.removeItem(LAST_QUIZ_SCORE_KEY);
+      }
+    }
   }, []);
 
   const fetchSavedQuestions = async () => {
@@ -106,10 +114,10 @@ export default function QuestionGeneratorPage() {
         .order('saved_at', { ascending: false })
         .limit(SAVED_QUESTIONS_FETCH_LIMIT);
       if (error) throw error;
-      setSavedIndividualQuestions(data || []); // Supabase client handles JSONB parsing for `options`
+      setSavedIndividualQuestions(data || []); 
     } catch (error) {
       toast({ variant: "destructive", title: "Error Fetching Saved Questions", description: (error as Error).message });
-      if(user) logActivity("Error", "Failed to fetch saved questions", { userId: user.id, error: (error as Error).message }, user.id);
+      if(user) logActivity("Error", "Failed to fetch saved questions", { error: (error as Error).message }, user.id);
     } finally {
       setIsFetchingSavedQuestions(false);
     }
@@ -156,7 +164,7 @@ export default function QuestionGeneratorPage() {
         subject,
         topic,
         source,
-        ...(difficulty !== 'any' && { difficulty }),
+        ...(difficulty !== 'any' && { difficulty: difficulty as 'easy' | 'medium' | 'hard' }),
       };
       const output = await generateRandomQuestion(input);
       if (user) {
@@ -288,26 +296,24 @@ export default function QuestionGeneratorPage() {
         toast({variant: "destructive", title: "Not Logged In", description: "You must be logged in to save questions."});
         return;
     }
-    // Ensure all necessary fields are present in questionData
     const questionToSave = {
         user_id: user.id,
         question_text: questionData.question,
         options: questionData.options,
         correct_answer_index: questionData.correctAnswerIndex,
         explanation: questionData.explanation,
-        subject: subject, // This comes from the quiz configuration, not questionData
-        topic: topic,     // This also comes from quiz configuration
-        source: source,   // Quiz configuration
-        difficulty: difficulty === 'any' ? undefined : difficulty, // Quiz configuration
+        subject: subject, 
+        topic: topic,     
+        source: source,   
+        difficulty: difficulty === 'any' ? undefined : difficulty, 
     };
 
     try {
         const { data, error } = await supabase.from('saved_questions').insert(questionToSave).select().single();
         if (error) throw error;
         toast({title: "Question Saved!", description: "This question has been saved to your account."});
-        if (data) {
-           // Refetch or update local list of saved questions if dialog is open
-           if (isSavedQuestionsDialogOpen) fetchSavedQuestions();
+        if (data && isSavedQuestionsDialogOpen) {
+           fetchSavedQuestions();
         }
         if(user) logActivity( "Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`, { questionId: data?.id }, user.id );
     } catch (err) {
@@ -506,7 +512,7 @@ export default function QuestionGeneratorPage() {
          <Dialog open={isSavedQuestionsDialogOpen} onOpenChange={setIsSavedQuestionsDialogOpen}>
           <DialogTrigger asChild>
             <Button variant="outline" onClick={() => { setIsSavedQuestionsDialogOpen(true); if(user) fetchSavedQuestions(); }} disabled={!user}>
-              <ListChecks className="mr-2 h-4 w-4"/> View Saved Questions ({authLoading ? '...' : savedIndividualQuestions.length})
+              <ListChecks className="mr-2 h-4 w-4"/> View Saved Questions ({authLoading || !user ? '...' : savedIndividualQuestions.length})
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl">
@@ -526,7 +532,6 @@ export default function QuestionGeneratorPage() {
                           <p className="text-sm font-semibold flex-1">Q: {sq.question_text}</p>
                           <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleDeleteSavedQuestion(sq.id)}><Trash2 className="h-4 w-4"/></Button>
                         </div>
-                        {/* Ensure sq.options is treated as an array */}
                         <p className="text-xs">Options: {Array.isArray(sq.options) ? sq.options.map((o: string, i: number) => `${String.fromCharCode(65+i)}. ${o}`).join(" | ") : "Options not available"}</p>
                         <p className="text-xs text-green-400">Correct: {String.fromCharCode(65+sq.correct_answer_index)}. {Array.isArray(sq.options) && sq.options[sq.correct_answer_index] ? sq.options[sq.correct_answer_index] : "N/A"}</p>
                         <p className="text-xs text-muted-foreground">Expl: {sq.explanation}</p>
