@@ -52,15 +52,41 @@ export default function ProfileSettingsPage() {
       setAvatarPreview(user.avatar_url || null);
       
       const savedTheme = typeof window !== "undefined" ? localStorage.getItem('appTheme') : 'dark';
-      if (savedTheme) setTheme(savedTheme); else setTheme('dark');
+      if (savedTheme === 'light' || savedTheme === 'dark') {
+        setTheme(savedTheme);
+        if (typeof window !== "undefined") {
+            document.documentElement.classList.remove('light', 'dark');
+            document.documentElement.classList.add(savedTheme);
+        }
+      } else {
+        setTheme('dark'); // Default to dark
+         if (typeof window !== "undefined") {
+            document.documentElement.classList.remove('light');
+            document.documentElement.classList.add('dark');
+        }
+      }
       
       const savedNotifications = typeof window !== "undefined" ? localStorage.getItem('appNotifications') : 'true';
-      if (savedNotifications) setNotifications(savedNotifications === 'true'); else setNotifications(true);
+      setNotifications(savedNotifications === 'true');
 
       const savedAlarmTone = typeof window !== "undefined" ? localStorage.getItem('appAlarmToneName') : null;
       if (savedAlarmTone) setAlarmToneName(savedAlarmTone);
+
+    } else if (!authLoading) { 
+        setName('');
+        setEmail(supabaseUser?.email || ''); // Use supabaseUser email if appUser is not loaded yet
+        setSelectedClass('none');
+        setTargetYear('none');
+        setAvatarPreview(null);
+        setTheme('dark');
+        if (typeof window !== "undefined") {
+            document.documentElement.classList.remove('light');
+            document.documentElement.classList.add('dark');
+        }
+        setNotifications(true);
+        setAlarmToneName(null);
     }
-  }, [user]);
+  }, [user, authLoading, supabaseUser]);
 
   const handleProfileSaveChanges = async (e: FormEvent) => {
     e.preventDefault();
@@ -69,69 +95,89 @@ export default function ProfileSettingsPage() {
       return;
     }
     setIsSavingProfile(true);
-    let finalAvatarUrl = user.avatar_url || undefined;
+    let finalAvatarUrl = user.avatar_url || undefined; // Keep current if no new file
     let profileUpdateError: PostgrestError | null = null;
     let authMetaError: AuthError | null = null;
+    let uploadErrorObj: Error | null = null;
 
     try {
       if (avatarFile) {
         const fileExt = avatarFile.name.split('.').pop();
         const uniqueFileName = `avatar_${Date.now()}.${fileExt}`;
-        const filePath = `avatars/${supabaseUser.id}/${uniqueFileName}`; 
+        // Path for avatars: USER_ID/avatars/unique_avatar_filename.ext
+        const filePath = `${supabaseUser.id}/avatars/${uniqueFileName}`; 
 
-        if (user.avatar_url && user.avatar_url.includes(supabaseUser.id) && user.avatar_url.includes(AVATAR_STORAGE_BUCKET_NAME)) {
-            const oldPathParts = user.avatar_url.split(`${AVATAR_STORAGE_BUCKET_NAME}/`);
-            if (oldPathParts.length > 1) {
-                const oldStoragePathWithPotentialQuery = oldPathParts[1];
-                const oldStoragePath = oldStoragePathWithPotentialQuery.split('?')[0];
-                if(oldStoragePath && oldStoragePath.startsWith('avatars/')){ 
-                    try {
-                        await supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).remove([oldStoragePath]);
-                    } catch (removeError) {
-                        console.warn("Could not remove old avatar, proceeding:", removeError);
-                        logActivity("Profile Warning", "Could not remove old avatar during update.", { error: (removeError as Error).message, path: oldStoragePath }, supabaseUser.id);
+        // Attempt to remove old avatar if it exists and was managed by this app
+        if (user.avatar_url) {
+            try {
+                // Extract path from URL: https://<project-ref>.supabase.co/storage/v1/object/public/<bucket-name>/<path-to-file>
+                const urlParts = user.avatar_url.split(`${AVATAR_STORAGE_BUCKET_NAME}/`);
+                if (urlParts.length > 1) {
+                    const oldStoragePath = urlParts[1].split('?')[0]; // Remove query params if any
+                    if (oldStoragePath && oldStoragePath.startsWith(`${supabaseUser.id}/avatars/`)) {
+                         await supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).remove([oldStoragePath]);
                     }
                 }
+            } catch (removeError) {
+                console.warn("Could not remove old avatar, proceeding:", removeError);
+                logActivity("Profile Warning", "Could not remove old avatar during update.", { error: (removeError as Error).message }, supabaseUser.id);
             }
         }
         
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { data: uploadData, error: uploadErr } = await supabase.storage
           .from(AVATAR_STORAGE_BUCKET_NAME) 
-          .upload(filePath, avatarFile, { upsert: true, contentType: avatarFile.type }); 
+          .upload(filePath, avatarFile, { upsert: false, contentType: avatarFile.type }); 
 
-        if (uploadError) throw new Error(`Avatar upload failed: ${uploadError.message}`);
+        if (uploadErr) {
+            uploadErrorObj = new Error(`Avatar upload failed: ${uploadErr.message}`);
+            throw uploadErrorObj;
+        }
         
         const { data: urlData } = supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).getPublicUrl(filePath);
         finalAvatarUrl = urlData.publicUrl;
-        setAvatarFile(null); 
-        setAvatarPreview(finalAvatarUrl); 
+        setAvatarFile(null); // Clear file after successful processing attempt
       }
 
+      // Prepare updates for 'profiles' table
       const profileUpdates: Partial<Omit<AppUser, 'id' | 'email'>> = { 
-        name, 
-        class: selectedClass === "none" ? null : selectedClass, 
-        target_year: targetYear === "none" ? null : targetYear,
-        avatar_url: finalAvatarUrl,
+        name: name === user.name ? undefined : name, // Only include if changed
+        class: (selectedClass === "none" ? null : selectedClass) === user.class ? undefined : (selectedClass === "none" ? null : selectedClass),
+        target_year: (targetYear === "none" ? null : targetYear) === user.target_year ? undefined : (targetYear === "none" ? null : targetYear),
+        avatar_url: finalAvatarUrl === user.avatar_url ? undefined : finalAvatarUrl,
         updated_at: new Date().toISOString()
       };
       
-      const { error: dbError } = await supabase
-        .from('profiles')
-        .update(profileUpdates)
-        .eq('id', supabaseUser.id);
-      
-      profileUpdateError = dbError;
-      if (profileUpdateError) throw profileUpdateError;
+      // Filter out undefined properties to only update changed fields
+      const actualProfileUpdates = Object.fromEntries(Object.entries(profileUpdates).filter(([_, v]) => v !== undefined));
 
+      if (Object.keys(actualProfileUpdates).length > 0 || (avatarFile && finalAvatarUrl !== user.avatar_url)) { // Check if there are actual changes
+         const { error: dbErr } = await supabase
+            .from('profiles')
+            .update(actualProfileUpdates)
+            .eq('id', supabaseUser.id);
+        
+        profileUpdateError = dbErr;
+        if (profileUpdateError) throw profileUpdateError;
+      }
+
+
+      // Prepare updates for auth.user_metadata
       const metadataUpdates: { data: Record<string, any> } = { data: {} };
-      if (profileUpdates.name !== user.name) metadataUpdates.data.name = profileUpdates.name;
-      if (profileUpdates.avatar_url !== user.avatar_url) metadataUpdates.data.avatar_url = profileUpdates.avatar_url;
+      let metadataChanged = false;
+      if (name !== user.name) {
+        metadataUpdates.data.name = name;
+        metadataChanged = true;
+      }
+      if (finalAvatarUrl && finalAvatarUrl !== user.avatar_url) {
+         metadataUpdates.data.avatar_url = finalAvatarUrl;
+         metadataChanged = true;
+      }
 
-      if (Object.keys(metadataUpdates.data).length > 0) {
+      if (metadataChanged) {
         const { error: metaErr } = await supabase.auth.updateUser(metadataUpdates);
         authMetaError = metaErr;
         if (authMetaError) {
-            console.warn("Profile DB updated, but auth user_metadata update failed:", authMetaError);
+            console.warn("Profile DB updated (if changes were made), but auth user_metadata update failed:", authMetaError);
         }
       }
       
@@ -139,16 +185,16 @@ export default function ProfileSettingsPage() {
       if (typeof window !== "undefined") {
         localStorage.setItem('appTheme', theme);
         document.documentElement.classList.remove('light', 'dark');
-        document.documentElement.classList.add(theme); // Simplified logic, assumes theme is 'light' or 'dark'
+        document.documentElement.classList.add(theme);
         
         localStorage.setItem('appNotifications', String(notifications));
         if (alarmToneName) localStorage.setItem('appAlarmToneName', alarmToneName);
       }
 
       toast({ title: "Profile Updated", description: "Your changes have been successfully saved.", action: <CheckCircle className="h-5 w-5 text-green-500" />, });
-      logActivity("Profile Update", "User profile changes saved.", { updates: Object.keys(profileUpdates).filter(k => profileUpdates[k as keyof typeof profileUpdates] !== undefined) }, supabaseUser.id);
+      logActivity("Profile Update", "User profile changes saved.", { updates: Object.keys(actualProfileUpdates) }, supabaseUser.id);
       
-      if(fetchAppUser) await fetchAppUser(supabaseUser);
+      if (fetchAppUser) await fetchAppUser(supabaseUser); // Refresh user context
 
     } catch (err) {
       const castError = err as AuthError | PostgrestError | Error;
@@ -182,7 +228,7 @@ export default function ProfileSettingsPage() {
     if (file && file.type.startsWith('audio/')) {
       setAlarmToneName(file.name); 
       if (typeof window !== "undefined") localStorage.setItem('appAlarmToneName', file.name);
-      toast({ title: "Alarm Tone Selected", description: `"${file.name}" selected. This is saved locally.`, });
+      toast({ title: "Alarm Tone Selected", description: `"${file.name}" selected. This is saved locally for UI demonstration.`, });
       if(user) logActivity("Profile Alarm Tone Select", "New alarm tone file selected (mock).", { fileName: file.name }, user.id);
     } else if (file) {
        toast({variant: "destructive", title: "Invalid File", description: "Please select an audio file."});
@@ -213,21 +259,23 @@ export default function ProfileSettingsPage() {
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
       
-      toast({ title: "Password Changed", description: "Your password has been successfully updated.", duration: 5000 });
+      toast({ title: "Password Changed", description: "Your password has been successfully updated. You might be signed out or asked to log in again.", duration: 7000 });
       setNewPassword('');
       setConfirmNewPassword('');
       logActivity("Profile Password Change", "Password change successful.", undefined, supabaseUser.id);
+      // Consider logging out user here for security or if Supabase requires it after password change.
+      // await logout(); router.push('/login');
     } catch (err) {
       console.error("Password change error:", err);
       const castError = err as AuthError | Error;
       toast({ variant: "destructive", title: "Password Change Failed", description: castError.message || "An error occurred." });
-      logActivity("Profile Password Error", "Password change failed.", { error: castError.message }, supabaseUser.id);
+      if(supabaseUser) logActivity("Profile Password Error", "Password change failed.", { error: castError.message }, supabaseUser.id);
     } finally {
       setIsPasswordSaving(false);
     }
   };
 
-   if (authLoading || (!user && !authLoading && !supabaseUser)) { 
+   if (authLoading) { 
     return (
         <div className="space-y-6">
           <div className="flex items-center space-x-3"> <Skeleton className="h-8 w-8 rounded-full" /> <Skeleton className="h-8 w-48" /> </div>
@@ -264,7 +312,6 @@ export default function ProfileSettingsPage() {
     );
   }
 
-
   return (
     <div className="space-y-6">
       <div className="flex items-center space-x-3"> <Settings className="h-8 w-8 text-primary" /> <h1 className="text-3xl font-bold tracking-tight">Profile & Settings</h1> </div>
@@ -300,7 +347,7 @@ export default function ProfileSettingsPage() {
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
             <div className="space-y-0.5"> <Label htmlFor="theme-select" className="text-base flex items-center"><Palette className="mr-2 h-5 w-5 text-muted-foreground"/>App Theme</Label> <p className="text-sm text-muted-foreground">Choose your preferred app appearance.</p> </div>
-            <Select value={theme} onValueChange={(newTheme) => { setTheme(newTheme); }} disabled={isSavingProfile}> <SelectTrigger id="theme-select" className="w-[180px]"> <SelectValue placeholder="Select Theme" /> </SelectTrigger> <SelectContent> <SelectItem value="light">Light</SelectItem> <SelectItem value="dark">Dark</SelectItem></SelectContent> </Select>
+            <Select value={theme} onValueChange={(newTheme) => { setTheme(newTheme as 'light' | 'dark'); }} disabled={isSavingProfile}> <SelectTrigger id="theme-select" className="w-[180px]"> <SelectValue placeholder="Select Theme" /> </SelectTrigger> <SelectContent> <SelectItem value="light">Light</SelectItem> <SelectItem value="dark">Dark</SelectItem></SelectContent> </Select>
           </div>
           <div className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
              <div className="space-y-0.5"> <Label htmlFor="notifications-switch" className="text-base flex items-center"><BellDot className="mr-2 h-5 w-5 text-muted-foreground"/>Notifications</Label> <p className="text-sm text-muted-foreground">Enable or disable task and app notifications (visual only).</p> </div>
@@ -326,7 +373,7 @@ export default function ProfileSettingsPage() {
             <h3 className="text-lg font-medium flex items-center"><KeyRound className="mr-2 h-5 w-5 text-muted-foreground"/>Change Password</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div> <Label htmlFor="new-password">New Password</Label> <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password (min. 6 chars)" disabled={isPasswordSaving}/> </div>
-              <div> <Label htmlFor="confirm-new-password">Confirm New Password</Label <Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="Confirm new password" disabled={isPasswordSaving}/> </div>
+              <div> <Label htmlFor="confirm-new-password">Confirm New Password</Label> <Input id="confirm-new-password" type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="Confirm new password" disabled={isPasswordSaving}/> </div>
             </div>
             <Button type="submit" variant="outline" disabled={isPasswordSaving || !newPassword || newPassword.length < 6 || newPassword !== confirmNewPassword}> {isPasswordSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <KeyRound className="mr-2 h-4 w-4"/>} Update Password </Button>
           </form>
