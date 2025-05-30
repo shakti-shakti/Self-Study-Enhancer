@@ -60,7 +60,7 @@ export default function FilesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<AppFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
-  const [isUploading, setIsUploading] = useState(false);
+  const [overallIsUploading, setOverallIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Record<string, { progress: number; error?: string | null; name: string; status: 'uploading' | 'success' | 'error' }>>({});
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -110,12 +110,14 @@ export default function FilesPage() {
     const selectedFiles = event.target.files;
     if (!selectedFiles || selectedFiles.length === 0) return;
 
-    setIsUploading(true);
+    setOverallIsUploading(true);
     const newUploadProgressEntries: Record<string, { progress: number; error?: string | null; name: string; status: 'uploading' | 'success' | 'error' }> = {};
     Array.from(selectedFiles).forEach(file => {
+        // Use a more unique key, e.g., file name + timestamp
         newUploadProgressEntries[file.name + Date.now()] = { progress: 0, name: file.name, status: 'uploading', error: null };
     });
-    setUploadProgress(prev => ({ ...prev, ...newUploadProgressEntries }));
+    // Clear previous progress for new batch, or merge if preferred
+    setUploadProgress({ ...newUploadProgressEntries }); 
 
     const uploadPromises = Array.from(selectedFiles).map(async (file) => {
       const progressKey = Object.keys(newUploadProgressEntries).find(key => newUploadProgressEntries[key].name === file.name)!;
@@ -123,7 +125,7 @@ export default function FilesPage() {
       const sanitizedBaseName = file.name.substring(0, file.name.lastIndexOf('.') !== -1 ? file.name.lastIndexOf('.') : file.name.length).replace(/[^a-zA-Z0-9_.-]/g, '_');
       const fileExt = file.name.split('.').pop()?.toLowerCase() || 'bin';
       const uniqueFileNameForStorage = `${sanitizedBaseName}_${Date.now()}.${fileExt}`;
-      const filePath = `${user.id}/${uniqueFileNameForStorage}`; // Store in user-specific folder
+      const filePath = `${user.id}/${uniqueFileNameForStorage}`; 
 
       try {
         setUploadProgress(prev => ({...prev, [progressKey]: { ...prev[progressKey], progress: 10, status: 'uploading' }}));
@@ -134,6 +136,8 @@ export default function FilesPage() {
             cacheControl: '3600',
             upsert: false,
             contentType: file.type,
+            // For progress, Supabase JS v2 doesn't have built-in XHR progress for upload
+            // Consider using a library or XHR directly if detailed progress is needed beyond "uploading"
           });
         
         if (uploadError) throw uploadError;
@@ -158,7 +162,8 @@ export default function FilesPage() {
           .single();
 
         if (dbError) {
-          await supabase.storage.from(STORAGE_BUCKET_NAME).remove([uploadData.path]); // Rollback storage upload
+          console.error("DB insert error, rolling back storage upload for:", uploadData.path, dbError);
+          await supabase.storage.from(STORAGE_BUCKET_NAME).remove([uploadData.path]); 
           throw dbError;
         }
         setUploadProgress(prev => ({ ...prev, [progressKey]: { ...prev[progressKey], progress: 100, status: 'success' } }));
@@ -166,7 +171,7 @@ export default function FilesPage() {
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown upload error';
         setUploadProgress(prev => ({ ...prev, [progressKey]: { ...prev[progressKey], progress: 0, status: 'error', error: errorMessage } }));
-        logActivity("File Upload Error", `Failed to upload ${file.name}: ${errorMessage}`, undefined, user.id);
+        if(user) logActivity("File Upload Error", `Failed to upload ${file.name}: ${errorMessage}`, {fileName: file.name}, user.id);
         return null; 
       }
     });
@@ -176,62 +181,67 @@ export default function FilesPage() {
       const successfulDbFiles = results.filter(Boolean) as AppFile[];
 
       if (successfulDbFiles.length > 0) {
-        fetchFiles();
+        fetchFiles(); // Refresh the file list from DB
         toast({
           title: `${successfulDbFiles.length} File(s) Uploaded Successfully`,
           description: `${successfulDbFiles.map(f => f.file_name).join(', ')} stored in Supabase.`,
         });
-        logActivity("File Upload", `${successfulDbFiles.length} file(s) uploaded.`, { names: successfulDbFiles.map(f => f.file_name) }, user.id);
+        if (user) logActivity("File Upload", `${successfulDbFiles.length} file(s) uploaded.`, { names: successfulDbFiles.map(f => f.file_name) }, user.id);
       }
+       // Handle cases where some uploads might have failed
+      const failedUploads = Object.values(uploadProgress).filter(p => p.status === 'error');
+      if (failedUploads.length > 0) {
+        toast({
+          variant: "destructive",
+          title: `${failedUploads.length} File(s) Failed to Upload`,
+          description: `Details: ${failedUploads.map(f => `${f.name}: ${f.error || 'Unknown reason'}`).join('; ')}`,
+          duration: 7000,
+        });
+      }
+
     } catch (error) {
-        // This catch block is for Promise.all itself, though individual errors are handled above.
         console.error("Error during Promise.all for file uploads:", error);
         toast({variant: "destructive", title: "Upload Process Error", description: "Some files may not have uploaded correctly."})
     } finally {
-        setIsUploading(false); // Ensure this is always called
-         // Clear temporary progress entries or mark them as fully processed
-        setTimeout(() => {
-            setUploadProgress(prev => {
-                const activeProgress = { ...prev };
-                Object.keys(activeProgress).forEach(key => {
-                    if (activeProgress[key].status === 'success' || activeProgress[key].status === 'error') {
-                        // Optionally remove them after a delay, or keep them with status
-                        // For now, let's keep them to show status, but you might want to clear them:
-                        // delete activeProgress[key]; 
-                    }
-                });
-                // Only set isUploading to false if there are no more "uploading" statuses
-                const stillUploading = Object.values(activeProgress).some(p => p.status === 'uploading');
-                if (!stillUploading) {
-                  setIsUploading(false);
-                }
-                return activeProgress; 
-            });
-        }, 5000); // Delay for 5 seconds before clearing/checking progress statuses
-
+        setOverallIsUploading(false); 
         if (fileInputRef.current) {
-          fileInputRef.current.value = "";
+          fileInputRef.current.value = ""; // Reset file input
         }
+        // Optionally clear successful/error progress items after a delay
+        // setTimeout(() => {
+        //   setUploadProgress(prev => {
+        //     const activeProgress = { ...prev };
+        //     Object.keys(activeProgress).forEach(key => {
+        //       if (activeProgress[key].status === 'success' || activeProgress[key].status === 'error') {
+        //         delete activeProgress[key]; 
+        //       }
+        //     });
+        //     return activeProgress;
+        //   });
+        // }, 5000); 
     }
   };
   
   const handleDeleteFile = async (fileToDelete: AppFile) => {
     if (!user || !fileToDelete.id || !fileToDelete.storage_path) return;
 
-    const originalFiles = [...files]; // Shallow copy for potential revert
+    const originalFiles = [...files]; 
     setFiles(prevFiles => prevFiles.filter(f => f.id !== fileToDelete.id));
 
     try {
+      // First, delete from Supabase Storage
       const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET_NAME)
           .remove([fileToDelete.storage_path]);
       
       if (storageError) {
+          // Log the error but proceed to delete from DB to avoid orphaned DB records if file is gone
           console.warn("Error deleting file from Supabase Storage, but proceeding with DB record deletion:", storageError);
-          toast({variant:"destructive", title: "Storage Deletion Warning", description: `Could not delete ${fileToDelete.file_name} from storage. DB record will still be removed.`});
-          logActivity("File Storage Warning", `Failed to delete ${fileToDelete.file_name} from storage, but DB record deletion will proceed.`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path, error: storageError.message }, user.id);
+          toast({variant:"destructive", title: "Storage Deletion Warning", description: `Could not delete ${fileToDelete.file_name} from storage. DB record will still be removed. Error: ${storageError.message}`});
+          if(user) logActivity("File Storage Warning", `Failed to delete ${fileToDelete.file_name} from storage.`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path, error: storageError.message }, user.id);
       }
 
+      // Then, delete from the database
       const { error: dbError } = await supabase
         .from('user_files')
         .delete()
@@ -240,11 +250,11 @@ export default function FilesPage() {
       if (dbError) throw dbError; // This will be caught by the outer catch block
 
       toast({ title: "File Removed", description: `"${fileToDelete.file_name}" has been removed from Supabase.` });
-      logActivity("File Delete", `File removed: "${fileToDelete.file_name}"`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path }, user.id);
+      if(user) logActivity("File Delete", `File removed: "${fileToDelete.file_name}"`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path }, user.id);
     } catch (error) {
       setFiles(originalFiles); 
       toast({ variant: "destructive", title: "Error Removing File", description: (error as Error).message });
-      logActivity("Error", `Error removing file: ${(error as Error).message}`, { fileId: fileToDelete.id }, user.id);
+      if(user) logActivity("Error", `Error removing file: ${(error as Error).message}`, { fileId: fileToDelete.id }, user.id);
     }
   };
 
@@ -256,19 +266,19 @@ export default function FilesPage() {
     try {
       const { data, error } = await supabase.storage
         .from(STORAGE_BUCKET_NAME)
-        .createSignedUrl(file.storage_path, 60 * 5); // Expires in 5 minutes
+        .createSignedUrl(file.storage_path, 60 * 5); // Signed URL expires in 5 minutes
 
       if (error) throw error;
       
       if (data?.signedUrl) {
         window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
-        logActivity("File Open", `Opened file: ${file.file_name}`, { path: file.storage_path }, user.id);
+        if (user) logActivity("File Open", `Opened file: ${file.file_name}`, { path: file.storage_path }, user.id);
       } else {
         toast({ variant: "destructive", title: "Could not get file URL", description: "Unable to generate a link for this file." });
       }
     } catch (error) {
       toast({ variant: "destructive", title: "Error Opening File", description: (error as Error).message });
-      logActivity("File Open Error", `Error opening file ${file.file_name}: ${(error as Error).message}`, {fileName: file.file_name}, user.id);
+      if(user) logActivity("File Open Error", `Error opening file ${file.file_name}: ${(error as Error).message}`, {fileName: file.file_name}, user.id);
     }
   };
 
@@ -299,16 +309,16 @@ export default function FilesPage() {
         className="hidden" 
         onChange={handleFileSelected}
         multiple
-        disabled={isUploading || !user}
+        disabled={overallIsUploading || !user}
       />
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <FolderOpen className="h-8 w-8 text-primary" />
           <h1 className="text-3xl font-bold tracking-tight">My Files &amp; Resources</h1>
         </div>
-        <Button onClick={handleUploadClick} disabled={isUploading || !user}>
-          {isUploading && Object.values(uploadProgress).some(p => p.status === 'uploading') ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <UploadCloud className="mr-2 h-4 w-4" />}
-          {isUploading && Object.values(uploadProgress).some(p => p.status === 'uploading') ? 'Uploading...' : 'Upload File(s)'}
+        <Button onClick={handleUploadClick} disabled={overallIsUploading || !user}>
+          {overallIsUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <UploadCloud className="mr-2 h-4 w-4" />}
+          {overallIsUploading ? 'Uploading...' : 'Upload File(s)'}
         </Button>
       </div>
        <Card>
@@ -424,4 +434,3 @@ export default function FilesPage() {
   );
 }
 
-    

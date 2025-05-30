@@ -13,7 +13,7 @@ import { generateRandomQuestion, type GenerateRandomQuestionInput, type Generate
 import { explainQuestion, type ExplainQuestionInput, type ExplainQuestionOutput } from '@/ai/flows/explain-question';
 import { useToast } from '@/hooks/use-toast';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Skeleton } from '@/components/ui/skeleton';
+import { Skeleton } from "@/components/ui/skeleton';
 import { logActivity } from '@/lib/activity-logger';
 import { useAuth } from '@/hooks/use-auth';
 import {
@@ -87,6 +87,7 @@ export default function QuestionGeneratorPage() {
   const fetchSavedQuestions = useCallback(async () => {
     if (!user) {
         setSavedIndividualQuestions([]);
+        setIsFetchingSavedQuestions(false);
         return;
     }
     setIsFetchingSavedQuestions(true);
@@ -128,7 +129,7 @@ export default function QuestionGeneratorPage() {
     } else {
       setTopic('');
     }
-  }, [subject, topic]);
+  }, [subject, topic]); // Removed topicsBySubject from dependency array as it's constant
 
   const fetchNewQuestion = useCallback(async () => {
     if (!user || !selectedClass || !subject || !topic || !source) {
@@ -137,12 +138,14 @@ export default function QuestionGeneratorPage() {
     }
     setIsLoadingQuestion(true);
     setOverallError(null);
-    logActivity(
-        "Quiz Generation", 
-        `Fetching question ${currentQuestionSet.length + 1} for ${subject} - ${topic}`,
-        { class: selectedClass, subject, topic, source, difficulty },
-        user.id
-    );
+    if (user) {
+        logActivity(
+            "Quiz Generation", 
+            `Fetching question ${currentQuestionSet.length + 1} for ${subject} - ${topic}`,
+            { class: selectedClass, subject, topic, source, difficulty },
+            user.id
+        );
+    }
     try {
       const input: GenerateRandomQuestionInput = {
         subject,
@@ -151,18 +154,22 @@ export default function QuestionGeneratorPage() {
         ...(difficulty !== 'any' && { difficulty: difficulty as 'easy' | 'medium' | 'hard' }),
       };
       const output = await generateRandomQuestion(input);
-      logActivity(
-          "Quiz Generation Success", 
-          `Successfully fetched question: ${output.question.substring(0,30)}...`,
-          undefined, user.id
-      );
+      if (user) {
+        logActivity(
+            "Quiz Generation Success", 
+            `Successfully fetched question: ${output.question.substring(0,30)}...`,
+            undefined, user.id
+        );
+      }
       return { ...output, id: crypto.randomUUID() };
     } catch (err) {
       console.error("Error generating question:", err);
       const errorMessage = err instanceof Error ? err.message : "Unknown error generating question.";
       setOverallError(`Failed to generate question: ${errorMessage}`);
       toast({ variant: "destructive", title: "Question Generation Error", description: errorMessage });
-      logActivity("Quiz Generation Error", errorMessage, { class: selectedClass, subject, topic, source, difficulty }, user.id);
+      if (user) {
+        logActivity("Quiz Generation Error", errorMessage, { class: selectedClass, subject, topic, source, difficulty }, user.id);
+      }
       return null;
     } finally {
       setIsLoadingQuestion(false);
@@ -226,27 +233,31 @@ export default function QuestionGeneratorPage() {
         } else {
           toast({variant: "destructive", title: "Failed to load next question", description: "Quiz ended. You can review your progress or restart."});
           setQuizState('completed'); 
-          logActivity(
-              "Quiz Error", 
-              "Failed to load next question mid-quiz", 
-              { attempted: currentQuestionIndex + 1 },
-              user.id
-          );
-          const finalTotalQuestions = updatedQuestionSet.length;
-          const finalAccuracy = finalTotalQuestions > 0 ? (currentScore / finalTotalQuestions) * 100 : 0;
-          const newQuizAttempt = {
-              user_id: user.id,
-              score: currentScore, 
-              total_questions: finalTotalQuestions,
-              accuracy: finalAccuracy,
-              subject: subject,
-              topic: topic,
-              quiz_timestamp: new Date().toISOString(),
-          };
-          await supabase.from('quiz_attempts').insert(newQuizAttempt);
+          if (user) {
+            logActivity(
+                "Quiz Error", 
+                "Failed to load next question mid-quiz", 
+                { attempted: currentQuestionIndex + 1 },
+                user.id
+            );
+            const finalTotalQuestions = updatedQuestionSet.length;
+            const finalAccuracy = finalTotalQuestions > 0 ? (currentScore / finalTotalQuestions) * 100 : 0;
+            const newQuizAttempt = {
+                user_id: user.id,
+                score: currentScore, 
+                total_questions: finalTotalQuestions,
+                accuracy: finalAccuracy,
+                subject: subject,
+                topic: topic,
+                quiz_timestamp: new Date().toISOString(),
+            };
+            await supabase.from('quiz_attempts').insert(newQuizAttempt);
+          }
           return;
         }
       } else {
+         // If question already exists in the set (e.g. user went back and forth - not implemented yet), just update the set.
+         // For now, this path is less likely with linear progression.
          setCurrentQuestionSet(updatedQuestionSet); 
       }
     } else { 
@@ -254,29 +265,31 @@ export default function QuestionGeneratorPage() {
       const finalTotalQuestions = updatedQuestionSet.length;
       const finalAccuracy = finalTotalQuestions > 0 ? (currentScore / finalTotalQuestions) * 100 : 0;
       
-      const newQuizAttempt = {
-          user_id: user.id,
-          score: currentScore,
-          total_questions: finalTotalQuestions,
-          accuracy: finalAccuracy,
-          subject: subject,
-          topic: topic,
-          quiz_timestamp: new Date().toISOString(),
-      };
-      try {
-          const { error: insertError } = await supabase.from('quiz_attempts').insert(newQuizAttempt);
-          if (insertError) throw insertError;
-      } catch (dbError) {
-          console.error("Error saving quiz attempt to DB:", dbError);
-          toast({variant: "destructive", title: "DB Error", description: "Could not save quiz results to your account."});
-      }
+      if(user) {
+        const newQuizAttempt = {
+            user_id: user.id,
+            score: currentScore,
+            total_questions: finalTotalQuestions,
+            accuracy: finalAccuracy,
+            subject: subject,
+            topic: topic,
+            quiz_timestamp: new Date().toISOString(),
+        };
+        try {
+            const { error: insertError } = await supabase.from('quiz_attempts').insert(newQuizAttempt);
+            if (insertError) throw insertError;
+        } catch (dbError) {
+            console.error("Error saving quiz attempt to DB:", dbError);
+            toast({variant: "destructive", title: "DB Error", description: "Could not save quiz results to your account."});
+        }
 
-      logActivity(
-          "Quiz Completed", 
-          `User finished quiz. Score: ${currentScore}/${finalTotalQuestions}`, 
-          { score: currentScore, total: finalTotalQuestions, subject, topic, numQuestions: numberOfQuestions },
-          user.id
-      );
+        logActivity(
+            "Quiz Completed", 
+            `User finished quiz. Score: ${currentScore}/${finalTotalQuestions}`, 
+            { score: currentScore, total: finalTotalQuestions, subject, topic, numQuestions: numberOfQuestions },
+            user.id
+        );
+      }
       setQuizState('completed');
     }
   };
@@ -311,10 +324,10 @@ export default function QuestionGeneratorPage() {
         if (data && isSavedQuestionsDialogOpen) {
            fetchSavedQuestions();
         }
-        logActivity( "Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`, { questionId: data?.id }, user.id );
+        if(user) logActivity( "Question Save", `Question saved: "${questionData.question.substring(0,30)}..."`, { questionId: data?.id }, user.id );
     } catch (err) {
         toast({variant: "destructive", title: "Save Failed", description: (err as Error).message});
-        logActivity( "Question Save Error", `Failed to save question: ${(err as Error).message}`, { questionText: questionData.question }, user.id );
+        if(user) logActivity( "Question Save Error", `Failed to save question: ${(err as Error).message}`, { questionText: questionData.question }, user.id );
     }
   };
   
@@ -329,7 +342,7 @@ export default function QuestionGeneratorPage() {
       if (error) throw error;
       setSavedIndividualQuestions(prev => prev.filter(q => q.id !== questionId));
       toast({title: "Question Deleted", description: "Saved question removed."});
-      logActivity("Saved Question Delete", `Deleted saved question ID: ${questionId}`, undefined, user.id);
+      if(user) logActivity("Saved Question Delete", `Deleted saved question ID: ${questionId}`, undefined, user.id);
     } catch (error) {
       toast({variant: "destructive", title: "Delete Failed", description: (error as Error).message});
       if(user) logActivity("Error", `Failed to delete saved question: ${(error as Error).message}`, {questionId}, user.id);
@@ -352,9 +365,9 @@ export default function QuestionGeneratorPage() {
      if (!qText || !user) return;
      setIsExplaining(true);
      setQuestionToExplain(qText);
-     setDetailedExplanation(null);
-     setIsExplanationDialogOpen(true);
-     logActivity("Question Explanation", `Requested explanation for: "${qText.substring(0,50)}..."`, undefined, user.id);
+     setDetailedExplanation(null); // Clear previous explanation
+     setIsExplanationDialogOpen(true); // Open dialog immediately
+     if (user) logActivity("Question Explanation", `Requested explanation for: "${qText.substring(0,50)}..."`, undefined, user.id);
      try {
         const input: ExplainQuestionInput = { question: qText };
         const output: ExplainQuestionOutput = await explainQuestion(input);
@@ -362,11 +375,11 @@ export default function QuestionGeneratorPage() {
      } catch (err) {
         console.error("Error explaining question:", err);
         const errorMessage = err instanceof Error ? err.message : "Unknown error explaining question.";
-        setDetailedExplanation(`Failed to get detailed explanation: ${errorMessage}`);
+        setDetailedExplanation(`Failed to get detailed explanation: ${errorMessage}`); // Show error in dialog
         toast({ variant: "destructive", title: "Explanation Error", description: errorMessage});
         if(user) logActivity("Explanation Error", `Failed to explain: "${qText.substring(0,50)}..."`, { error: errorMessage }, user.id);
      } finally {
-        setIsExplaining(false);
+        setIsExplaining(false); // Stop loading indicator
      }
   };
 
@@ -669,3 +682,4 @@ export default function QuestionGeneratorPage() {
     </div>
   );
 }
+
