@@ -9,11 +9,8 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
-// A default Lo-fi Beats playlist for studying. Ensure this is a valid *embed* URL.
-// Example: Lo-fi Girl: "https://open.spotify.com/embed/playlist/0vvXsWCC9xrXsKd4FyS8kM?utm_source=generator&theme=0"
-// Example: Chill Vibes: "https://open.spotify.com/embed/playlist/37i9dQZF1DX6VdMW310Y1z?utm_source=generator&theme=0"
+// Default Lo-fi Beats playlist for studying.
 const DEFAULT_SPOTIFY_EMBED_URL = "https://open.spotify.com/embed/playlist/37i9dQZF1DX8Uebhn9wzrS?utm_source=generator&theme=0"; 
-
 
 export default function MusicPlayerPage() {
   const [spotifyEmbedUrl, setSpotifyEmbedUrl] = useState(DEFAULT_SPOTIFY_EMBED_URL);
@@ -22,12 +19,11 @@ export default function MusicPlayerPage() {
 
   const handleChangeEmbedUrl = () => {
     const trimmedUrl = inputUrl.trim();
-    // Basic validation for Spotify embed URL structure
     if (trimmedUrl.startsWith("https://open.spotify.com/embed/")) {
       setSpotifyEmbedUrl(trimmedUrl);
       toast({title: "Spotify Player Updated", description: "Loading new Spotify content."});
     } else {
-      toast({variant: "destructive", title: "Invalid URL", description: "Please provide a valid Spotify EMBED URL (e.g., https://open.spotify.com/embed/playlist/your_playlist_id)."});
+      toast({variant: "destructive", title: "Invalid URL", description: "Please provide a valid Spotify EMBED URL (e.g., from Share > Embed playlist/track)."});
     }
   };
 
@@ -39,17 +35,17 @@ export default function MusicPlayerPage() {
       </div>
       <Alert>
         <Music2 className="h-4 w-4" />
-        <AlertTitle>Spotify Integration Note</AlertTitle>
+        <AlertTitle>Spotify Integration</AlertTitle>
         <AlertDescription>
-          This page uses Spotify's iframe embedding. You can play music if you are logged into Spotify in your browser.
-          To change the playlist/album, get an <strong className="text-primary">embed code</strong> from Spotify (Share &gt; Embed track/playlist) and paste the <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">src</code> URL from the iframe code into the input field below.
+          This page embeds Spotify content via an iframe. You can play music if you are logged into Spotify in your browser.
+          To change the playlist/album, get an <strong className="text-primary">embed URL</strong> from Spotify (Share &gt; Embed track/playlist &gt; copy the `src` attribute from the iframe code) and paste it below.
         </AlertDescription>
       </Alert>
       <Card>
         <CardHeader>
           <CardTitle>Focus with Spotify</CardTitle>
           <CardDescription>
-            Paste a Spotify embed URL below to change the music, or enjoy the default study playlist.
+            Enjoy the default study playlist or paste a Spotify embed URL below to change the music.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -71,16 +67,16 @@ export default function MusicPlayerPage() {
           <div className="aspect-[16/9] sm:aspect-video w-full max-w-2xl mx-auto border rounded-lg overflow-hidden shadow-lg bg-muted">
             {spotifyEmbedUrl ? (
               <iframe
-                key={spotifyEmbedUrl} // Change key to force re-render of iframe on URL change
+                key={spotifyEmbedUrl} // Key change forces iframe re-render
                 title="Spotify Embed Player"
                 src={spotifyEmbedUrl}
                 width="100%"
                 height="100%" 
-                allowFullScreen={false} // Spotify embed usually controls its own full screen behavior
+                allowFullScreen={false}
                 allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
                 loading="lazy"
                 className="border-0"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups" // Common sandbox attributes for embeds
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
               ></iframe>
             ) : (
               <div className="w-full h-full flex items-center justify-center">

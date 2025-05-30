@@ -24,11 +24,11 @@ import { format, parseISO } from 'date-fns';
 
 interface LastQuizScore {
   score: number;
-  totalQuestions: number;
+  total_questions: number;
   accuracy: number;
-  quiz_timestamp: string; // from Supabase
-  subject?: string;
-  topic?: string;
+  quiz_timestamp: string; 
+  subject?: string | null;
+  topic?: string | null;
 }
 
 interface CountdownConfig {
@@ -76,22 +76,12 @@ export default function DashboardPage() {
   }, []);
 
   const fetchCountdownConfig = useCallback(async () => {
-    if (!user) { // Fallback to localStorage if not logged in
+    if (!user) {
         setIsLoadingCountdown(false);
-        const localConfig = localStorage.getItem('dashboardCountdownConfig');
-        if (localConfig) {
-            try {
-                const parsedConfig = JSON.parse(localConfig) as CountdownConfig;
-                setCountdownConfig(parsedConfig);
-                setTempEventName(parsedConfig.eventName);
-                setTempEventDate(parsedConfig.eventDate);
-            } catch { /* ignore parse error, use default */ }
-        } else {
-            const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
-            setCountdownConfig(defaultConfig);
-            setTempEventName(defaultConfig.eventName);
-            setTempEventDate(defaultConfig.eventDate);
-        }
+        const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+        setCountdownConfig(defaultConfig);
+        setTempEventName(defaultConfig.eventName);
+        setTempEventDate(defaultConfig.eventDate);
         return;
     }
     setIsLoadingCountdown(true);
@@ -102,14 +92,14 @@ export default function DashboardPage() {
         .eq('user_id', user.id)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error; // PGRST116: single row not found
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116: single row not found means no config yet
 
       if (data && data.countdown_event_name && data.countdown_event_date) {
         const config = { eventName: data.countdown_event_name, eventDate: format(parseISO(data.countdown_event_date), 'yyyy-MM-dd') };
         setCountdownConfig(config);
         setTempEventName(config.eventName);
         setTempEventDate(config.eventDate);
-      } else { // No config found in DB, set default and save it
+      } else { // No config found in DB for this user, set default and save it
         const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
         setCountdownConfig(defaultConfig);
         setTempEventName(defaultConfig.eventName);
@@ -120,27 +110,31 @@ export default function DashboardPage() {
             .upsert({ 
                 user_id: user.id, 
                 countdown_event_name: defaultConfig.eventName, 
-                countdown_event_date: defaultConfig.eventDate, // Ensure this is just date part
+                countdown_event_date: defaultConfig.eventDate,
                 updated_at: new Date().toISOString()
-            }, { onConflict: 'user_id' });
-        if(upsertError) console.error("Error saving default countdown to Supabase:", upsertError);
+            }, { onConflict: 'user_id' }); // Use onConflict to handle if row already exists (e.g. from another session)
+        if(upsertError) {
+          console.error("Error saving default countdown to Supabase:", upsertError);
+          logActivity("Dashboard Error", "Failed to save default countdown config", { error: upsertError.message }, user.id);
+        }
       }
     } catch (err) {
       console.error("Error fetching/setting countdown config from Supabase:", err);
+      // Fallback to default if Supabase fetch fails
       const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
       setCountdownConfig(defaultConfig); 
       setTempEventName(defaultConfig.eventName);
       setTempEventDate(defaultConfig.eventDate);
-      localStorage.setItem('dashboardCountdownConfig', JSON.stringify(defaultConfig)); // Fallback
+      if(user) logActivity("Dashboard Error", "Error fetching countdown config", { error: (err as Error).message }, user.id);
     } finally {
       setIsLoadingCountdown(false);
     }
-  }, [user, getDefaultNeetDate]);
+  }, [user, getDefaultNeetDate]); // Removed logActivity from dependency array
   
   const fetchLastQuizScore = useCallback(async () => {
     if (!user) {
       setIsLoadingQuizScore(false);
-      setLastQuizScore(null); // Clear if no user
+      setLastQuizScore(null);
       return;
     }
     setIsLoadingQuizScore(true);
@@ -153,33 +147,41 @@ export default function DashboardPage() {
         .limit(1)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error;
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 means no rows found, which is not an error for this
       setLastQuizScore(data as LastQuizScore | null);
     } catch (err) {
       console.error("Error fetching last quiz score from Supabase:", err);
-      setLastQuizScore(null);
+      setLastQuizScore(null); // Set to null on error
+      if(user) logActivity("Dashboard Error", "Error fetching last quiz score", { error: (err as Error).message }, user.id);
     } finally {
       setIsLoadingQuizScore(false);
     }
-  }, [user]);
+  }, [user]); // Removed logActivity from dependency array
 
 
   useEffect(() => {
     setRandomFact(syllabusFacts[Math.floor(Math.random() * syllabusFacts.length)]);
-    if (!authLoading) {
+    if (!authLoading && user) {
       fetchCountdownConfig();
       fetchLastQuizScore();
+    } else if (!authLoading && !user) {
+        // Handle non-logged in state for countdown
+        const defaultConfig = { eventName: "NEET Exam", eventDate: getDefaultNeetDate() };
+        setCountdownConfig(defaultConfig);
+        setTempEventName(defaultConfig.eventName);
+        setTempEventDate(defaultConfig.eventDate);
+        setIsLoadingCountdown(false);
+        setLastQuizScore(null);
+        setIsLoadingQuizScore(false);
     }
-  }, [user, authLoading, fetchCountdownConfig, fetchLastQuizScore]);
+  }, [user, authLoading, fetchCountdownConfig, fetchLastQuizScore, getDefaultNeetDate]);
 
   useEffect(() => {
     if (!countdownConfig || !countdownConfig.eventDate) return;
 
     const calculateTimeLeft = () => {
       // Ensure eventDate is treated as a date without time for accurate daily countdown
-      const targetDateUTC = new Date(countdownConfig.eventDate + "T00:00:00Z"); // Assume UTC if no timezone
-      // For a more local feel, and to countdown to the start of that day in user's local timezone:
-      const targetDateLocal = new Date(countdownConfig.eventDate); // This will parse as local timezone at midnight
+      const targetDateLocal = new Date(countdownConfig.eventDate + "T00:00:00"); // Parse as local midnight
       
       const difference = +targetDateLocal - +new Date();
       let newTimeLeft = { days: 0, hours: 0, minutes: 0, seconds: 0 };
@@ -196,12 +198,16 @@ export default function DashboardPage() {
     };
 
     const timer = setInterval(calculateTimeLeft, 1000);
-    calculateTimeLeft(); 
+    calculateTimeLeft(); // Initial calculation
     return () => clearInterval(timer);
   }, [countdownConfig]);
 
   const handleSaveCountdown = async (e: FormEvent) => {
     e.preventDefault();
+    if (!user) {
+        toast({variant: "destructive", title: "Login Required", description: "You must be logged in to save countdown settings."});
+        return;
+    }
     if (!tempEventName || !tempEventDate) {
       toast({ variant: "destructive", title: "Error", description: "Event name and date are required." });
       return;
@@ -209,18 +215,10 @@ export default function DashboardPage() {
     
     const newConfig: CountdownConfig = {
       eventName: tempEventName,
-      eventDate: tempEventDate, // Ensure this is just date part 'yyyy-MM-dd'
+      eventDate: tempEventDate, 
     };
     
     setIsCountdownDialogOpen(false);
-
-    if (!user) { // Save to localStorage if not logged in
-        localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig));
-        setCountdownConfig(newConfig); // Update local state
-        toast({ title: "Countdown Updated (Locally)", description: `Timer set for ${newConfig.eventName}.` });
-        return;
-    }
-
     setIsSubmittingCountdown(true);
     try {
       const { error } = await supabase
@@ -228,19 +226,19 @@ export default function DashboardPage() {
         .upsert({ 
           user_id: user.id, 
           countdown_event_name: newConfig.eventName, 
-          countdown_event_date: newConfig.eventDate, // Ensure date format is compatible with Supabase DATE type
+          countdown_event_date: newConfig.eventDate,
           updated_at: new Date().toISOString()
         }, { onConflict: 'user_id' });
       
       if (error) throw error;
-      setCountdownConfig(newConfig); // Update local state after successful save
+      setCountdownConfig(newConfig); 
       toast({ title: "Countdown Updated", description: `Timer set for ${newConfig.eventName} and saved to your account.` });
-      logActivity("Dashboard Config", "Countdown timer updated", { eventName: newConfig.eventName, eventDate: newConfig.eventDate });
+      logActivity("Dashboard Config", "Countdown timer updated", { eventName: newConfig.eventName, eventDate: newConfig.eventDate }, user.id);
     } catch (err) {
       toast({ variant: "destructive", title: "Error Saving Countdown", description: (err as Error).message });
-      localStorage.setItem('dashboardCountdownConfig', JSON.stringify(newConfig)); // Fallback to local
-      setCountdownConfig(newConfig);
-      logActivity("Dashboard Error", "Failed to save countdown config", { error: (err as Error).message });
+      // Don't revert UI optimistically, let it reflect user's input
+      // setCountdownConfig(countdownConfig); // Revert to old if save fails - or let new temp value stay?
+      logActivity("Dashboard Error", "Failed to save countdown config", { error: (err as Error).message }, user.id);
     } finally {
         setIsSubmittingCountdown(false);
     }
@@ -264,36 +262,38 @@ export default function DashboardPage() {
           <CardHeader className="pb-2">
             <div className="flex justify-between items-center">
               <CardTitle className="flex items-center"><Clock className="mr-2 h-5 w-5 text-primary" />Countdown to {countdownConfig.eventName}</CardTitle>
-              <Dialog open={isCountdownDialogOpen} onOpenChange={setIsCountdownDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7"><Edit className="h-4 w-4"/></Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <form onSubmit={handleSaveCountdown}>
-                    <DialogHeader>
-                      <DialogTitle>Customize Countdown</DialogTitle>
-                      <DialogDescription>Set the event name and date for your countdown timer.</DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div>
-                        <Label htmlFor="event-name">Event Name</Label>
-                        <Input id="event-name" value={tempEventName} onChange={(e) => setTempEventName(e.target.value)} placeholder="e.g., NEET Exam 2025" />
+              {user && (
+                <Dialog open={isCountdownDialogOpen} onOpenChange={setIsCountdownDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7"><Edit className="h-4 w-4"/></Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-md">
+                    <form onSubmit={handleSaveCountdown}>
+                      <DialogHeader>
+                        <DialogTitle>Customize Countdown</DialogTitle>
+                        <DialogDescription>Set the event name and date for your countdown timer.</DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div>
+                          <Label htmlFor="event-name">Event Name</Label>
+                          <Input id="event-name" value={tempEventName} onChange={(e) => setTempEventName(e.target.value)} placeholder="e.g., NEET Exam 2025" />
+                        </div>
+                        <div>
+                          <Label htmlFor="event-date">Event Date</Label>
+                          <Input id="event-date" type="date" value={tempEventDate} onChange={(e) => setTempEventDate(e.target.value)} />
+                        </div>
                       </div>
-                      <div>
-                        <Label htmlFor="event-date">Event Date</Label>
-                        <Input id="event-date" type="date" value={tempEventDate} onChange={(e) => setTempEventDate(e.target.value)} />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                       <DialogClose asChild><Button type="button" variant="outline" disabled={isSubmittingCountdown}>Cancel</Button></DialogClose>
-                      <Button type="submit" disabled={isSubmittingCountdown}>
-                        {isSubmittingCountdown && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}
-                        Save Countdown
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
+                      <DialogFooter>
+                         <DialogClose asChild><Button type="button" variant="outline" disabled={isSubmittingCountdown}>Cancel</Button></DialogClose>
+                        <Button type="submit" disabled={isSubmittingCountdown}>
+                          {isSubmittingCountdown && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}
+                          Save Countdown
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -308,7 +308,7 @@ export default function DashboardPage() {
       ) : (
          <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
           <CardHeader><CardTitle>Set Countdown</CardTitle></CardHeader>
-          <CardContent><p>Could not load countdown configuration. You can set one by clicking the edit icon.</p></CardContent>
+          <CardContent><p>Could not load countdown configuration. {user ? "You can set one by clicking the edit icon." : "Log in to set a personalized countdown."}</p></CardContent>
         </Card>
       )}
 
@@ -331,7 +331,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             {isLoadingQuizScore ? (
-              <div className="space-y-2"> <Skeleton className="h-6 w-1/2"/> <Skeleton className="h-4 w-3/4"/></div>
+              <div className="space-y-2 flex items-center"> <Loader2 className="mr-2 h-5 w-5 animate-spin"/> Loading last quiz...</div>
             ) : lastQuizScore ? (
               <div>
                 <p className="text-sm text-muted-foreground">
@@ -344,7 +344,7 @@ export default function DashboardPage() {
                 </p>
               </div>
             ) : (
-              <p className="text-muted-foreground">Complete a quiz in the <Link href="/question-generator" className="text-primary hover:underline">Question Generator</Link> to see your performance here.</p>
+              <p className="text-muted-foreground">{ user ? "Complete a quiz in the Question Generator to see your performance." : "Log in and complete a quiz to track performance."}</p>
             )}
              <Link href="/question-generator" passHref>
                 <Button variant="link" className="p-0 h-auto mt-2 text-primary">Go to Quiz</Button>

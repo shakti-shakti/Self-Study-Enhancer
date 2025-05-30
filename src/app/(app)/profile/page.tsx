@@ -15,22 +15,21 @@ import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { logActivity } from '@/lib/activity-logger';
 import { supabase } from '@/lib/supabaseClient';
+import Link from 'next/link';
 
-const AVATAR_STORAGE_BUCKET_NAME = 'user_uploads'; // Or 'avatars' if you have a dedicated bucket
+const AVATAR_STORAGE_BUCKET_NAME = 'user_uploads'; // This must match your bucket name for avatars
 
 export default function ProfileSettingsPage() {
   const { user, supabaseUser, isLoading: authLoading, updateUserProfile, fetchAppUser } = useAuth();
   const { toast } = useToast();
   
-  // Form states, initialized when user data is available
   const [name, setName] = useState('');
-  const [email, setEmail] = useState(''); // Email is usually not changed by user directly
+  const [email, setEmail] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
   const [targetYear, setTargetYear] = useState('');
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
-  const [avatarFile, setAvatarFile] = useState<File | null>(null); // For actual upload
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
   
-  // Preferences (managed by localStorage, but saved on profile save for UX consistency)
   const [theme, setTheme] = useState('dark'); 
   const [notifications, setNotifications] = useState(true);
   const [alarmToneName, setAlarmToneName] = useState<string | null>(null);
@@ -47,11 +46,10 @@ export default function ProfileSettingsPage() {
     if (user) {
       setName(user.name || '');
       setEmail(user.email || '');
-      setSelectedClass(user.class || 'none'); // Default to 'none' if null/undefined
-      setTargetYear(user.target_year || 'none'); // Default to 'none' if null/undefined
+      setSelectedClass(user.class || 'none');
+      setTargetYear(user.target_year || 'none');
       setAvatarPreview(user.avatar_url || null);
       
-      // Load preferences from localStorage
       const savedTheme = localStorage.getItem('appTheme');
       if (savedTheme) setTheme(savedTheme); else setTheme('dark');
       
@@ -70,20 +68,22 @@ export default function ProfileSettingsPage() {
       return;
     }
     setIsSavingProfile(true);
-    let publicAvatarUrl = user.avatar_url || undefined; // Keep existing if no new file or if upload fails
+    let finalAvatarUrl = user.avatar_url || undefined;
 
     try {
       if (avatarFile) {
         const fileExt = avatarFile.name.split('.').pop();
         const uniqueFileName = `avatar_${Date.now()}.${fileExt}`;
-        const filePath = `avatars/${supabaseUser.id}/${uniqueFileName}`; // User-specific folder for avatars
+        // Store avatars in a user-specific folder within the main bucket, or a dedicated 'avatars' bucket
+        // For this example, let's assume an 'avatars' subfolder in AVATAR_STORAGE_BUCKET_NAME
+        const filePath = `avatars/${supabaseUser.id}/${uniqueFileName}`; 
 
-        // Attempt to delete old avatar if one exists and is from our storage
-        if (user.avatar_url && user.avatar_url.includes(supabaseUser.id)) { // Basic check
+        // Remove old avatar if it exists and was managed by us
+        if (user.avatar_url && user.avatar_url.includes(supabaseUser.id) && user.avatar_url.includes(AVATAR_STORAGE_BUCKET_NAME)) {
             const oldPathParts = user.avatar_url.split(`${AVATAR_STORAGE_BUCKET_NAME}/`);
             if (oldPathParts.length > 1) {
-                const oldStoragePath = oldPathParts[1].split('?')[0]; // Remove query params if any
-                if(oldStoragePath){
+                const oldStoragePath = oldPathParts[1].split('?')[0];
+                if(oldStoragePath && oldStoragePath.startsWith('avatars/')){ // Ensure it's an avatar path
                     await supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).remove([oldStoragePath]);
                 }
             }
@@ -91,31 +91,50 @@ export default function ProfileSettingsPage() {
         
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from(AVATAR_STORAGE_BUCKET_NAME) 
-          .upload(filePath, avatarFile, { upsert: false }); 
+          .upload(filePath, avatarFile, { upsert: true, contentType: avatarFile.type }); 
 
-        if (uploadError) {
-          console.error('Avatar Upload Error:', uploadError);
-          throw new Error(`Avatar upload failed: ${uploadError.message}`);
-        }
+        if (uploadError) throw new Error(`Avatar upload failed: ${uploadError.message}`);
         
         const { data: urlData } = supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).getPublicUrl(filePath);
-        publicAvatarUrl = urlData.publicUrl;
-        setAvatarFile(null); // Clear file after successful upload
-        setAvatarPreview(publicAvatarUrl); // Update preview immediately
+        finalAvatarUrl = urlData.publicUrl;
+        setAvatarFile(null); 
+        setAvatarPreview(finalAvatarUrl); 
       }
 
       const profileUpdates: Partial<Omit<AppUser, 'id' | 'email'>> = { 
         name, 
         class: selectedClass === "none" ? null : selectedClass, 
         target_year: targetYear === "none" ? null : targetYear,
-        avatar_url: publicAvatarUrl 
+        avatar_url: finalAvatarUrl 
       };
       
-      await updateUserProfile(profileUpdates); // This updates 'profiles' table and auth.user_metadata
+      // This now only updates the 'profiles' table. Auth metadata is separate.
+      const { error: profileDbError } = await supabase
+        .from('profiles')
+        .update(profileUpdates)
+        .eq('id', supabaseUser.id);
       
-      // Save theme to localStorage and apply it
+      if (profileDbError) throw profileDbError;
+
+      // Update auth.user_metadata separately if name or avatar_url changed
+      const metadataUpdates: { data: Record<string, any> } = { data: {} };
+      if (profileUpdates.name && profileUpdates.name !== (user.name || supabaseUser.user_metadata?.name)) {
+        metadataUpdates.data.name = profileUpdates.name;
+      }
+      if (profileUpdates.avatar_url && profileUpdates.avatar_url !== (user.avatar_url || supabaseUser.user_metadata?.avatar_url)) {
+        metadataUpdates.data.avatar_url = profileUpdates.avatar_url;
+      }
+
+      if (Object.keys(metadataUpdates.data).length > 0) {
+        const { error: authMetaError } = await supabase.auth.updateUser(metadataUpdates);
+        if (authMetaError) {
+            console.warn("Profile DB updated, but auth user_metadata update failed:", authMetaError);
+            logActivity("Profile Warning", "Failed to update auth user_metadata.", { error: authMetaError.message }, supabaseUser.id);
+        }
+      }
+      
       localStorage.setItem('appTheme', theme);
-      document.documentElement.classList.remove('light', 'dark');
+      document.documentElement.classList.remove('light', 'dark', 'system'); // Remove all theme classes
       if (theme === 'system') {
           const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
           document.documentElement.classList.add(systemTheme);
@@ -124,15 +143,22 @@ export default function ProfileSettingsPage() {
       }
 
       localStorage.setItem('appNotifications', String(notifications));
-      if (alarmToneName) localStorage.setItem('appAlarmToneName', alarmToneName); // Still local for mock
+      if (alarmToneName) localStorage.setItem('appAlarmToneName', alarmToneName);
 
       toast({ title: "Profile Updated", description: "Your changes have been saved to Supabase.", action: <CheckCircle className="h-5 w-5 text-green-500" />, });
-      logActivity("Profile Update", "User profile changes saved.", { updates: Object.keys(profileUpdates).filter(k => profileUpdates[k as keyof typeof profileUpdates] !== undefined) });
-      if (supabaseUser) await fetchAppUser(supabaseUser); // Re-fetch user to update context globally
+      logActivity("Profile Update", "User profile changes saved.", { updates: Object.keys(profileUpdates).filter(k => profileUpdates[k as keyof typeof profileUpdates] !== undefined) }, supabaseUser.id);
+      
+      // Re-fetch the user from auth context to update UI globally (e.g., UserNav)
+      // The fetchAppUser inside AuthProvider should handle this on USER_UPDATED event,
+      // but an explicit call might be good for immediate reflection if needed.
+      // Consider if updateUserProfile in AuthContext already does this.
+      // Forcing a re-fetch of the AppUser from AuthContext.
+      if(fetchAppUser) await fetchAppUser(supabaseUser);
+
 
     } catch (err) {
       toast({ variant: "destructive", title: "Update Failed", description: err instanceof Error ? err.message : "Could not save profile changes.", });
-       logActivity("Profile Update Error", "Failed to save profile changes.", { error: err instanceof Error ? err.message : String(err) });
+      logActivity("Profile Update Error", "Failed to save profile changes.", { error: err instanceof Error ? err.message : String(err) }, supabaseUser.id);
     } finally {
       setIsSavingProfile(false);
     }
@@ -150,8 +176,7 @@ export default function ProfileSettingsPage() {
         setAvatarPreview(reader.result as string); 
       };
       reader.readAsDataURL(file);
-      // toast({ title: "Photo Selected", description: `${file.name} preview updated. Click 'Save Personal Info' to upload.`, });
-      logActivity("Profile Photo Select", "New photo selected for preview.", { fileName: file.name });
+      if (user) logActivity("Profile Photo Select", "New photo selected for preview.", { fileName: file.name }, user.id);
     } else if (file) {
       toast({variant: "destructive", title: "Invalid File", description: "Please select an image file for your avatar."});
     }
@@ -162,7 +187,7 @@ export default function ProfileSettingsPage() {
     if (file && file.type.startsWith('audio/')) {
       setAlarmToneName(file.name); 
       toast({ title: "Alarm Tone Selected (Mock)", description: `"${file.name}" selected. This is a UI mock; tone not saved/used for actual alarms.`, });
-      logActivity("Profile Alarm Tone Select", "New alarm tone file selected (mock).", { fileName: file.name });
+      if(user) logActivity("Profile Alarm Tone Select", "New alarm tone file selected (mock).", { fileName: file.name }, user.id);
     } else if (file) {
        toast({variant: "destructive", title: "Invalid File", description: "Please select an audio file."});
     }
@@ -195,17 +220,17 @@ export default function ProfileSettingsPage() {
       toast({ title: "Password Changed", description: "Your password has been successfully updated.", duration: 5000 });
       setNewPassword('');
       setConfirmNewPassword('');
-      logActivity("Profile Password Change", "Password change successful.");
+      logActivity("Profile Password Change", "Password change successful.", undefined, supabaseUser.id);
     } catch (err) {
       console.error("Password change error:", err);
       toast({ variant: "destructive", title: "Password Change Failed", description: (err as Error).message || "An error occurred." });
-      logActivity("Profile Password Error", "Password change failed.", { error: (err as Error).message });
+      logActivity("Profile Password Error", "Password change failed.", { error: (err as Error).message }, supabaseUser.id);
     } finally {
       setIsPasswordSaving(false);
     }
   };
 
-   if (authLoading && !user) {
+   if (authLoading || (!user && !authLoading)) { // Show skeleton if auth is loading OR if auth is done but no user
     return (
         <div className="space-y-6">
           <div className="flex items-center space-x-3"> <Skeleton className="h-8 w-8 rounded-full" /> <Skeleton className="h-8 w-48" /> </div>
@@ -230,6 +255,18 @@ export default function ProfileSettingsPage() {
         </div>
     );
   }
+  if (!user && !authLoading) { // Explicitly handle case where user is definitively not logged in
+    return (
+      <div className="flex flex-col items-center justify-center h-64 space-y-4">
+        <Settings className="h-16 w-16 text-muted-foreground" />
+        <p className="text-muted-foreground">Please log in to view and edit your profile.</p>
+        <Link href="/login" passHref>
+          <Button>Log In</Button>
+        </Link>
+      </div>
+    );
+  }
+
 
   return (
     <div className="space-y-6">
@@ -262,7 +299,7 @@ export default function ProfileSettingsPage() {
       </form>
 
       <Card className="shadow-lg mb-6">
-        <CardHeader> <CardTitle>App Preferences</CardTitle> <CardDescription>Customize your app experience. These settings are saved locally to your browser when you save your profile.</CardDescription> </CardHeader>
+        <CardHeader> <CardTitle>App Preferences</CardTitle> <CardDescription>Customize your app experience. Theme and notification preferences are saved locally to your browser when you "Save Personal Info".</CardDescription> </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
             <div className="space-y-0.5"> <Label htmlFor="theme-select" className="text-base flex items-center"><Palette className="mr-2 h-5 w-5 text-muted-foreground"/>App Theme</Label> <p className="text-sm text-muted-foreground">Choose your preferred app appearance.</p> </div>
@@ -281,7 +318,6 @@ export default function ProfileSettingsPage() {
           </div>
         </CardContent>
          <CardFooter>
-          {/* The main form submission button will save these preferences as well */}
           <p className="text-xs text-muted-foreground ml-auto">App preferences are saved when you click "Save Personal Info".</p>
         </CardFooter>
       </Card>
