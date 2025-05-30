@@ -1,6 +1,6 @@
 
 "use client";
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent, useCallback } from 'react'; // Added useCallback
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { ClipboardList, PlusCircle, Edit2, Trash2, AlarmClock, CalendarIcon as CalendarIconLucide, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,15 +30,15 @@ import { cn } from '@/lib/utils';
 import { logActivity } from '@/lib/activity-logger';
 
 interface CustomTask {
-  id: string; 
+  id: string;
   user_id: string;
   title: string;
-  description?: string | null; // Allow null from Supabase
+  description?: string | null;
   completed: boolean;
   category: string;
-  task_date?: string | null; 
+  task_date?: string | null;
   has_reminder?: boolean | null;
-  reminder_time?: string | null; 
+  reminder_time?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -52,7 +52,7 @@ export default function CustomTasksPage() {
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   const [currentEditingTask, setCurrentEditingTask] = useState<Partial<CustomTask> & { id?: string }>({});
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
@@ -86,8 +86,11 @@ export default function CustomTasksPage() {
   }, [user, toast]);
 
   useEffect(() => {
-     if (!authLoading) {
+     if (!authLoading && user) {
       fetchTasks();
+    } else if (!authLoading && !user) {
+      setIsLoadingTasks(false);
+      setCustomTasks([]);
     }
   }, [user, authLoading, fetchTasks]);
 
@@ -97,7 +100,7 @@ export default function CustomTasksPage() {
       setTaskTitle(task.title);
       setTaskDescription(task.description || '');
       setTaskCategory(task.category);
-      setTaskDate(task.task_date ? parseISO(task.task_date) : undefined);
+      setTaskDate(task.task_date && isValid(parseISO(task.task_date)) ? parseISO(task.task_date) : undefined);
       setTaskHasReminder(task.has_reminder || false);
       setTaskReminderTime(task.reminder_time || '09:00');
     } else {
@@ -128,7 +131,7 @@ export default function CustomTasksPage() {
     }
     setIsSubmitting(true);
 
-    const taskDataToSave = {
+    const taskDataToSave: Omit<CustomTask, 'id' | 'created_at' | 'updated_at'> = {
       user_id: user.id,
       title: taskTitle,
       description: taskDescription || null,
@@ -136,11 +139,11 @@ export default function CustomTasksPage() {
       task_date: taskDate ? format(startOfDay(taskDate), 'yyyy-MM-dd') : null,
       has_reminder: taskHasReminder,
       reminder_time: taskHasReminder ? taskReminderTime : null,
-      completed: currentEditingTask.id ? currentEditingTask.completed : false,
+      completed: currentEditingTask.id ? currentEditingTask.completed || false : false,
     };
 
     try {
-      if (currentEditingTask.id) { 
+      if (currentEditingTask.id) {
         const { error } = await supabase
           .from('custom_tasks')
           .update({ ...taskDataToSave, updated_at: new Date().toISOString() })
@@ -149,12 +152,12 @@ export default function CustomTasksPage() {
         if (error) throw error;
         toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
         logActivity("Custom Tasks", `Task updated: "${taskTitle}"`, { taskId: currentEditingTask.id }, user.id);
-      } else { 
+      } else {
         const { data, error } = await supabase
           .from('custom_tasks')
           .insert(taskDataToSave)
           .select()
-          .single(); 
+          .single();
         if (error) throw error;
         toast({ title: "Task Added", description: `"${taskTitle}" has been added.` });
         if (data) logActivity("Custom Tasks", `Task added: "${taskTitle}"`, { taskId: data.id }, user.id);
@@ -171,7 +174,7 @@ export default function CustomTasksPage() {
 
   const toggleTaskCompletion = async (taskId: string, currentStatus: boolean) => {
     if (!user) return;
-    
+
     const optimisticTasks = customTasks.map(t => t.id === taskId ? { ...t, completed: !currentStatus } : t);
     setCustomTasks(optimisticTasks);
 
@@ -182,10 +185,10 @@ export default function CustomTasksPage() {
         .eq('id', taskId)
         .eq('user_id', user.id);
       if (error) {
-        fetchTasks(); 
+        fetchTasks();
         throw error;
       }
-      const task = customTasks.find(t=>t.id === taskId); 
+      const task = customTasks.find(t=>t.id === taskId);
       if(task && user) {
         toast({title: `Task ${!currentStatus ? 'Completed' : 'Marked Incomplete'}`, description: `"${task.title}"`});
         logActivity("Custom Tasks", `Task ${!currentStatus ? 'completed' : 'marked incomplete'}: "${task.title}"`, { taskId }, user.id);
@@ -201,7 +204,7 @@ export default function CustomTasksPage() {
     const taskToDelete = customTasks.find(t => t.id === taskId);
     if (!taskToDelete) return;
 
-    setCustomTasks(customTasks.filter(t => t.id !== taskId)); 
+    setCustomTasks(customTasks.filter(t => t.id !== taskId));
 
     try {
       const { error } = await supabase
@@ -210,7 +213,7 @@ export default function CustomTasksPage() {
         .eq('id', taskId)
         .eq('user_id', user.id);
       if (error) {
-        fetchTasks(); 
+        fetchTasks();
         throw error;
       }
       toast({ variant: "destructive", title: "Task Deleted", description: `"${taskToDelete.title}" removed.` });
@@ -221,7 +224,7 @@ export default function CustomTasksPage() {
     }
   };
 
-  if (authLoading) {
+  if (authLoading && !user) {
      return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -336,7 +339,7 @@ export default function CustomTasksPage() {
                       </Label>
                       <div className="text-xs text-muted-foreground">
                         <span>{task.category}</span>
-                        {task.task_date && <span> - {format(parseISO(task.task_date), "EEE, MMM d")}</span>}
+                        {task.task_date && isValid(parseISO(task.task_date)) && <span> - {format(parseISO(task.task_date), "EEE, MMM d")}</span>}
                       </div>
                       {task.description && <p className="text-sm mt-1 text-muted-foreground/80 whitespace-pre-wrap">{task.description}</p>}
                       {task.has_reminder && task.reminder_time && (
