@@ -1,10 +1,10 @@
+
 "use client";
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { UploadCloud, FileText, ImageIcon, FolderOpen, Search, Trash2, ExternalLink, Loader2, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-// import Image from "next/image"; // Not used directly for preview to simplify
 import { useToast } from '@/hooks/use-toast';
 import {
   AlertDialog,
@@ -21,6 +21,7 @@ import { logActivity } from '@/lib/activity-logger';
 import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabaseClient';
 import { Progress } from '@/components/ui/progress';
+import Link from 'next/link';
 
 interface AppFile {
   id: string; 
@@ -28,15 +29,14 @@ interface AppFile {
   file_name: string;
   file_type: "pdf" | "image" | "doc" | "unknown";
   file_size_text: string;
-  original_upload_date?: string | null; // Ensure compatibility with Supabase
+  original_upload_date?: string | null;
   ai_hint?: string | null;
   created_at?: string;
-  storage_path: string; // Path in Supabase Storage, now mandatory for DB entries
-  // local_preview_url?: string; // Removed as we'll use signed URLs or direct links
+  storage_path: string; 
 }
 
 const FILES_FETCH_LIMIT = 50;
-const STORAGE_BUCKET_NAME = 'user_uploads'; // Define your bucket name
+const STORAGE_BUCKET_NAME = 'user-uploads'; // CORRECTED: Using hyphen
 
 function getFileType(fileName: string): AppFile['file_type'] {
   const extension = fileName.split('.').pop()?.toLowerCase();
@@ -61,7 +61,7 @@ export default function FilesPage() {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, { progress: number, error?: string }>>({});
+  const [uploadProgress, setUploadProgress] = useState<Record<string, { progress: number; error?: string; name: string }>>({});
   const [searchTerm, setSearchTerm] = useState('');
 
   const fetchFiles = useCallback(async () => {
@@ -111,15 +111,15 @@ export default function FilesPage() {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
     setIsUploading(true);
-    const currentUploadProgress: Record<string, { progress: number, error?: string }> = {};
+    const currentUploadProgress: Record<string, { progress: number, error?: string, name: string }> = {};
     Array.from(selectedFiles).forEach(file => {
-        currentUploadProgress[file.name] = { progress: 0 };
+        currentUploadProgress[file.name + Date.now()] = { progress: 0, name: file.name }; // Use unique key for progress state
     });
     setUploadProgress(currentUploadProgress);
 
-    const uploadPromises = Array.from(selectedFiles).map(async (file) => {
-      const fileNameForProgress = file.name;
-      
+    const uploadPromises = Array.from(selectedFiles).map(async (file, index) => {
+      const progressKey = Object.keys(currentUploadProgress)[index]; // Get the unique key
+
       const sanitizedBaseName = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-zA-Z0-9_.-]/g, '_');
       const fileExt = file.name.split('.').pop()?.toLowerCase() || 'bin';
       const uniqueFileNameForStorage = `${sanitizedBaseName}_${Date.now()}.${fileExt}`;
@@ -130,21 +130,22 @@ export default function FilesPage() {
           .from(STORAGE_BUCKET_NAME)
           .upload(filePath, file, {
             cacheControl: '3600',
-            upsert: false,
+            upsert: false, // Set to true if you want to overwrite if file with same path exists
             contentType: file.type,
-            // Note: Supabase JS client v2 doesn't directly support progress callback in .upload()
-            // For progress, one might need a more complex setup or a different library approach
-            // For now, we'll simulate 0 -> 50 (upload) -> 100 (db insert)
+            // Supabase JS client v2's upload method doesn't have a direct progress callback.
+            // For true progress, a more complex setup with XHR or a library like Uppy is needed.
+            // We simulate basic steps.
           });
         
-        setUploadProgress(prev => ({...prev, [fileNameForProgress]: { progress: 50 }}));
+        // Simulate upload part done
+        setUploadProgress(prev => ({...prev, [progressKey]: { ...prev[progressKey], progress: 50 }}));
 
         if (uploadError) throw uploadError;
         if (!uploadData) throw new Error("Upload completed but no data returned from Supabase Storage.");
 
         const fileMetadata: Omit<AppFile, 'id' | 'created_at'> = {
           user_id: user.id,
-          file_name: file.name,
+          file_name: file.name, // Store original file name
           file_type: getFileType(file.name),
           file_size_text: formatFileSize(file.size),
           original_upload_date: new Date().toISOString().split('T')[0],
@@ -159,16 +160,17 @@ export default function FilesPage() {
           .single();
 
         if (dbError) {
+          // If DB insert fails, try to remove the uploaded file from storage
           await supabase.storage.from(STORAGE_BUCKET_NAME).remove([uploadData.path]);
           throw dbError;
         }
-        setUploadProgress(prev => ({ ...prev, [fileNameForProgress]: { progress: 100 } }));
+        setUploadProgress(prev => ({ ...prev, [progressKey]: { ...prev[progressKey], progress: 100 } }));
         return dbData as AppFile;
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown upload error';
         toast({ variant: "destructive", title: `Error Uploading ${file.name}`, description: errorMessage });
         if(user) logActivity("File Upload Error", `Failed to upload ${file.name}: ${errorMessage}`, undefined, user.id);
-        setUploadProgress(prev => ({ ...prev, [fileNameForProgress]: { progress: 0, error: errorMessage } }));
+        setUploadProgress(prev => ({ ...prev, [progressKey]: { ...prev[progressKey], progress: 0, error: errorMessage } }));
         return null;
       }
     });
@@ -180,12 +182,28 @@ export default function FilesPage() {
       fetchFiles(); 
       toast({
         title: `${successfulDbFiles.length} File(s) Uploaded Successfully`,
-        description: `${successfulDbFiles.map(f => f.file_name).join(', ')} stored.`,
+        description: `${successfulDbFiles.map(f => f.file_name).join(', ')} stored in Supabase.`,
       });
       if(user) logActivity("File Upload", `${successfulDbFiles.length} file(s) uploaded.`, { names: successfulDbFiles.map(f => f.file_name) }, user.id);
     }
     
-    setIsUploading(false);
+    // Clear progress for successful/failed uploads after a delay
+    setTimeout(() => {
+        setUploadProgress(prev => {
+            const newProgress = { ...prev };
+            Object.keys(newProgress).forEach(key => {
+                if (newProgress[key].progress === 100 || newProgress[key].error) {
+                    delete newProgress[key];
+                }
+            });
+            return newProgress;
+        });
+        if (Object.keys(uploadProgress).length === 0) { // Only set isUploading to false if all done
+           setIsUploading(false);
+        }
+    }, 3000);
+
+
     if (fileInputRef.current) {
       fileInputRef.current.value = ""; 
     }
@@ -201,14 +219,20 @@ export default function FilesPage() {
       const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET_NAME)
           .remove([fileToDelete.storage_path]);
-      if (storageError) throw storageError; // Throw to catch block to revert UI if storage delete fails
+      // We might not want to throw an error if storage deletion fails but DB deletion succeeds,
+      // or vice versa. Log it, but proceed.
+      if (storageError) {
+          console.warn("Error deleting file from Supabase Storage, but proceeding with DB record deletion:", storageError);
+          toast({variant:"destructive", title: "Storage Deletion Warning", description: `Could not delete ${fileToDelete.file_name} from storage: ${storageError.message}. DB record will still be removed.`});
+          logActivity("File Storage Warning", `Failed to delete ${fileToDelete.file_name} from storage, but DB record deletion will proceed.`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path, error: storageError.message }, user.id);
+      }
 
       const { error: dbError } = await supabase
         .from('user_files')
         .delete()
         .eq('id', fileToDelete.id)
         .eq('user_id', user.id);
-      if (dbError) throw dbError; // Throw to catch block
+      if (dbError) throw dbError;
 
       toast({ title: "File Removed", description: `"${fileToDelete.file_name}" has been removed.` });
       if(user) logActivity("File Delete", `File removed: "${fileToDelete.file_name}"`, { fileId: fileToDelete.id, storagePath: fileToDelete.storage_path }, user.id);
@@ -221,11 +245,12 @@ export default function FilesPage() {
 
   const handleOpenFile = async (file: AppFile) => {
     if (!user || !file.storage_path) {
-      toast({ title: "File Not Stored Correctly", description: "This file does not have a valid storage path." });
+      toast({ variant: "destructive", title: "File Not Stored Correctly", description: "This file does not have a valid storage path." });
       return;
     }
     try {
       // Create a signed URL for temporary access (e.g., 5 minutes)
+      // This is generally safer than relying on public URLs, especially if your bucket isn't fully public.
       const { data, error } = await supabase.storage
         .from(STORAGE_BUCKET_NAME)
         .createSignedUrl(file.storage_path, 60 * 5); // Expires in 5 minutes
@@ -248,10 +273,10 @@ export default function FilesPage() {
     file.file_name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  if (authLoading && !user) {
+  if (authLoading && !user) { // Show main loader if auth is determining user state
     return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
-  if (!user && !authLoading) {
+  if (!user && !authLoading) { // If auth is done and no user, show login prompt
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
         <FolderOpen className="h-16 w-16 text-muted-foreground" />
@@ -271,7 +296,7 @@ export default function FilesPage() {
         ref={fileInputRef} 
         className="hidden" 
         onChange={handleFileSelected}
-        multiple 
+        multiple // Allow multiple file selection
         disabled={isUploading || !user}
       />
       <div className="flex items-center justify-between">
@@ -290,21 +315,21 @@ export default function FilesPage() {
         </CardHeader>
         <CardContent>
             <p className="text-sm text-muted-foreground">
-                Files are uploaded to Supabase Storage in the bucket named <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">{STORAGE_BUCKET_NAME}</code> under your user ID.
+                Files are uploaded to Supabase Storage in the bucket named <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">{STORAGE_BUCKET_NAME}</code> under your user ID (e.g., <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">{"{user_id}/yourfile.pdf"}</code>).
                 Metadata is stored in the <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">user_files</code> table.
-                Ensure the storage bucket exists and has RLS policies allowing authenticated uploads to <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">{"{user_id}/*"}</code> and appropriate read access (e.g., via signed URLs).
+                Ensure the storage bucket exists and has RLS policies allowing authenticated uploads to the user's folder and appropriate read access (e.g., via signed URLs).
             </p>
         </CardContent>
        </Card>
       
-      {isUploading && Object.keys(uploadProgress).length > 0 && (
+      {Object.keys(uploadProgress).length > 0 && (
         <Card className="mt-4">
           <CardHeader><CardTitle>Upload Progress</CardTitle></CardHeader>
           <CardContent className="space-y-3">
-            {Object.entries(uploadProgress).map(([fileName, status]) => (
-              <div key={fileName}>
+            {Object.entries(uploadProgress).map(([key, status]) => (
+              <div key={key}>
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="truncate max-w-[70%]">{fileName}</span>
+                  <span className="truncate max-w-[70%]">{status.name}</span>
                   {status.error ? <span className="text-destructive">Error</span> : 
                    status.progress === 100 ? <CheckCircle className="h-5 w-5 text-green-500"/> : 
                    <span className="text-muted-foreground">{status.progress}%</span>}
@@ -320,7 +345,7 @@ export default function FilesPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Uploaded Materials</CardTitle>
-          <CardDescription>Manage your uploaded files. Showing latest {FILES_FETCH_LIMIT}.</CardDescription>
+          <CardDescription>Manage your uploaded files from Supabase. Showing latest {FILES_FETCH_LIMIT}.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center space-x-2 mb-6">
@@ -337,11 +362,6 @@ export default function FilesPage() {
             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
-          ) : !user ? ( // This case should be handled by top-level guard, but for safety:
-             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center text-center">
-                 <FolderOpen className="h-16 w-16 text-muted-foreground mb-4"/>
-                <p className="text-muted-foreground">Please log in to manage your files.</p>
-             </div>
           ) : filteredFiles.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredFiles.map(file => (
@@ -380,7 +400,7 @@ export default function FilesPage() {
                         </AlertDialogHeader>
                         <AlertDialogFooter>
                           <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={() => handleDeleteFile(file)} className="bg-destructive hover:bg-destructive/90">
+                          <AlertDialogAction onClick={() => handleDeleteFile(fileToDelete)} className="bg-destructive hover:bg-destructive/90">
                             Remove
                           </AlertDialogAction>
                         </AlertDialogFooter>
@@ -402,3 +422,5 @@ export default function FilesPage() {
     </div>
   );
 }
+
+    

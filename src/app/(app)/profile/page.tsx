@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Settings, Edit3, Palette, BellDot, CheckCircle, UploadCloud, KeyRound, Volume2, Loader2 } from "lucide-react";
+import { Settings, Palette, BellDot, CheckCircle, UploadCloud, KeyRound, Volume2, Loader2 } from "lucide-react"; // Removed Edit3
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,10 +17,10 @@ import { logActivity } from '@/lib/activity-logger';
 import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 
-const AVATAR_STORAGE_BUCKET_NAME = 'user_uploads'; // This must match your bucket name for avatars
+const AVATAR_STORAGE_BUCKET_NAME = 'user-uploads'; // CORRECTED: Using hyphen
 
 export default function ProfileSettingsPage() {
-  const { user, supabaseUser, isLoading: authLoading, updateUserProfile, fetchAppUser } = useAuth();
+  const { user, supabaseUser, isLoading: authLoading, fetchAppUser } = useAuth(); // Removed updateUserProfile, will use fetchAppUser after updates
   const { toast } = useToast();
   
   const [name, setName] = useState('');
@@ -50,8 +50,9 @@ export default function ProfileSettingsPage() {
       setTargetYear(user.target_year || 'none');
       setAvatarPreview(user.avatar_url || null);
       
+      // Theme and notification preferences are still local for UI, but could be moved to Supabase
       const savedTheme = localStorage.getItem('appTheme');
-      if (savedTheme) setTheme(savedTheme); else setTheme('dark');
+      if (savedTheme) setTheme(savedTheme); else setTheme('dark'); // Default to dark
       
       const savedNotifications = localStorage.getItem('appNotifications');
       if (savedNotifications) setNotifications(savedNotifications === 'true'); else setNotifications(true);
@@ -74,17 +75,21 @@ export default function ProfileSettingsPage() {
       if (avatarFile) {
         const fileExt = avatarFile.name.split('.').pop();
         const uniqueFileName = `avatar_${Date.now()}.${fileExt}`;
-        // Store avatars in a user-specific folder within the main bucket, or a dedicated 'avatars' bucket
-        // For this example, let's assume an 'avatars' subfolder in AVATAR_STORAGE_BUCKET_NAME
         const filePath = `avatars/${supabaseUser.id}/${uniqueFileName}`; 
 
-        // Remove old avatar if it exists and was managed by us
+        // Attempt to remove old avatar if it exists and was managed by us
         if (user.avatar_url && user.avatar_url.includes(supabaseUser.id) && user.avatar_url.includes(AVATAR_STORAGE_BUCKET_NAME)) {
             const oldPathParts = user.avatar_url.split(`${AVATAR_STORAGE_BUCKET_NAME}/`);
             if (oldPathParts.length > 1) {
-                const oldStoragePath = oldPathParts[1].split('?')[0];
-                if(oldStoragePath && oldStoragePath.startsWith('avatars/')){ // Ensure it's an avatar path
-                    await supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).remove([oldStoragePath]);
+                const oldStoragePathWithPotentialQuery = oldPathParts[1];
+                const oldStoragePath = oldStoragePathWithPotentialQuery.split('?')[0]; // Remove query params if any
+                if(oldStoragePath && oldStoragePath.startsWith('avatars/')){ 
+                    try {
+                        await supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).remove([oldStoragePath]);
+                    } catch (removeError) {
+                        console.warn("Could not remove old avatar, proceeding:", removeError);
+                        logActivity("Profile Warning", "Could not remove old avatar during update.", { error: (removeError as Error).message, path: oldStoragePath }, supabaseUser.id);
+                    }
                 }
             }
         }
@@ -96,7 +101,7 @@ export default function ProfileSettingsPage() {
         if (uploadError) throw new Error(`Avatar upload failed: ${uploadError.message}`);
         
         const { data: urlData } = supabase.storage.from(AVATAR_STORAGE_BUCKET_NAME).getPublicUrl(filePath);
-        finalAvatarUrl = urlData.publicUrl;
+        finalAvatarUrl = urlData.publicUrl; // This assumes the bucket is public or RLS allows access
         setAvatarFile(null); 
         setAvatarPreview(finalAvatarUrl); 
       }
@@ -105,10 +110,10 @@ export default function ProfileSettingsPage() {
         name, 
         class: selectedClass === "none" ? null : selectedClass, 
         target_year: targetYear === "none" ? null : targetYear,
-        avatar_url: finalAvatarUrl 
+        avatar_url: finalAvatarUrl,
+        updated_at: new Date().toISOString() // Add updated_at for profiles table
       };
       
-      // This now only updates the 'profiles' table. Auth metadata is separate.
       const { error: profileDbError } = await supabase
         .from('profiles')
         .update(profileUpdates)
@@ -133,28 +138,22 @@ export default function ProfileSettingsPage() {
         }
       }
       
+      // Save UI preferences locally
       localStorage.setItem('appTheme', theme);
-      document.documentElement.classList.remove('light', 'dark', 'system'); // Remove all theme classes
+      document.documentElement.classList.remove('light', 'dark', 'system');
       if (theme === 'system') {
           const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
           document.documentElement.classList.add(systemTheme);
       } else {
           document.documentElement.classList.add(theme);
       }
-
       localStorage.setItem('appNotifications', String(notifications));
       if (alarmToneName) localStorage.setItem('appAlarmToneName', alarmToneName);
 
       toast({ title: "Profile Updated", description: "Your changes have been saved to Supabase.", action: <CheckCircle className="h-5 w-5 text-green-500" />, });
       logActivity("Profile Update", "User profile changes saved.", { updates: Object.keys(profileUpdates).filter(k => profileUpdates[k as keyof typeof profileUpdates] !== undefined) }, supabaseUser.id);
       
-      // Re-fetch the user from auth context to update UI globally (e.g., UserNav)
-      // The fetchAppUser inside AuthProvider should handle this on USER_UPDATED event,
-      // but an explicit call might be good for immediate reflection if needed.
-      // Consider if updateUserProfile in AuthContext already does this.
-      // Forcing a re-fetch of the AppUser from AuthContext.
-      if(fetchAppUser) await fetchAppUser(supabaseUser);
-
+      if(fetchAppUser) await fetchAppUser(supabaseUser); // Re-fetch user from auth context to update UI
 
     } catch (err) {
       toast({ variant: "destructive", title: "Update Failed", description: err instanceof Error ? err.message : "Could not save profile changes.", });
@@ -186,7 +185,8 @@ export default function ProfileSettingsPage() {
     const file = event.target.files?.[0];
     if (file && file.type.startsWith('audio/')) {
       setAlarmToneName(file.name); 
-      toast({ title: "Alarm Tone Selected (Mock)", description: `"${file.name}" selected. This is a UI mock; tone not saved/used for actual alarms.`, });
+      localStorage.setItem('appAlarmToneName', file.name); // Persist locally
+      toast({ title: "Alarm Tone Selected", description: `"${file.name}" selected. This is saved locally.`, });
       if(user) logActivity("Profile Alarm Tone Select", "New alarm tone file selected (mock).", { fileName: file.name }, user.id);
     } else if (file) {
        toast({variant: "destructive", title: "Invalid File", description: "Please select an audio file."});
@@ -230,7 +230,7 @@ export default function ProfileSettingsPage() {
     }
   };
 
-   if (authLoading || (!user && !authLoading)) { // Show skeleton if auth is loading OR if auth is done but no user
+   if (authLoading || (!user && !authLoading)) { 
     return (
         <div className="space-y-6">
           <div className="flex items-center space-x-3"> <Skeleton className="h-8 w-8 rounded-full" /> <Skeleton className="h-8 w-48" /> </div>
@@ -255,7 +255,7 @@ export default function ProfileSettingsPage() {
         </div>
     );
   }
-  if (!user && !authLoading) { // Explicitly handle case where user is definitively not logged in
+  if (!user && !authLoading) { 
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
         <Settings className="h-16 w-16 text-muted-foreground" />
@@ -299,7 +299,7 @@ export default function ProfileSettingsPage() {
       </form>
 
       <Card className="shadow-lg mb-6">
-        <CardHeader> <CardTitle>App Preferences</CardTitle> <CardDescription>Customize your app experience. Theme and notification preferences are saved locally to your browser when you "Save Personal Info".</CardDescription> </CardHeader>
+        <CardHeader> <CardTitle>App Preferences</CardTitle> <CardDescription>Customize your app experience. Theme and notification preferences are saved locally to your browser when you "Save Personal Info". Alarm tone selection is for UI demonstration.</CardDescription> </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between p-4 border rounded-lg hover:shadow-sm transition-shadow">
             <div className="space-y-0.5"> <Label htmlFor="theme-select" className="text-base flex items-center"><Palette className="mr-2 h-5 w-5 text-muted-foreground"/>App Theme</Label> <p className="text-sm text-muted-foreground">Choose your preferred app appearance.</p> </div>
@@ -318,7 +318,7 @@ export default function ProfileSettingsPage() {
           </div>
         </CardContent>
          <CardFooter>
-          <p className="text-xs text-muted-foreground ml-auto">App preferences are saved when you click "Save Personal Info".</p>
+          <p className="text-xs text-muted-foreground ml-auto">App preferences are saved locally when you click "Save Personal Info".</p>
         </CardFooter>
       </Card>
 
@@ -338,3 +338,5 @@ export default function ProfileSettingsPage() {
     </div>
   );
 }
+
+    
