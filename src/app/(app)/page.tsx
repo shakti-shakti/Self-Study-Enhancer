@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import TaskManagement from '@/components/TaskManagement';
 import {
   Dialog,
   DialogContent,
@@ -132,6 +133,8 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold tracking-tight">Welcome to NEET Prep Pro!</h1>
+
+      <TaskManagement />
       
       {countdownConfig && (
         <Card className="shadow-lg bg-gradient-to-r from-primary/20 to-accent/20 border-primary/40">
@@ -267,5 +270,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-    

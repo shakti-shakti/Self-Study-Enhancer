@@ -1,8 +1,8 @@
 
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
-import { CalendarDays, PlusCircle, CheckSquare, Square, Edit2, Trash2, CalendarIcon as CalendarIconLucide } from "lucide-react"; // Renamed CalendarIcon to avoid conflict
+import { CalendarDays, PlusCircle, CheckSquare, Square, Edit2, Trash2, CalendarIcon as CalendarIconLucide, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -20,48 +20,72 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { useToast } from '@/hooks/use-toast';
-import { loadFromLocalStorage, saveToLocalStorage } from '@/lib/local-storage';
-import { logActivity } from '@/lib/activity-logger';
-import { format, parseISO } from 'date-fns';
+import { useAuth } from '@/hooks/use-auth';
+import { supabase } from '@/lib/supabaseClient';
+import { format, parseISO, isValid, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 interface Task {
-  id: string;
+  id: string; // UUID from Supabase
+  user_id: string;
   title: string;
-  date: string; // ISO string for the date
-  startTime: string;
+  task_date: string; // ISO string for the date (YYYY-MM-DD)
+  start_time: string; // HH:MM
   duration: string;
   completed: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
-
-const DAY_PLANNER_TASKS_KEY = 'neetPrepProDayPlannerTasks';
 
 export default function DayPlannerPage() {
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [currentTask, setCurrentTask] = useState<Partial<Task> & { id?: string }>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
+  const [currentTask, setCurrentTask] = useState<Partial<Task> & { id?: string }>({});
   const [taskTitle, setTaskTitle] = useState('');
   const [taskDate, setTaskDate] = useState<Date | undefined>(new Date());
   const [taskTime, setTaskTime] = useState('09:00');
   const [taskDuration, setTaskDuration] = useState('1 hr');
 
-  useEffect(() => {
-    setTasks(loadFromLocalStorage<Task[]>(DAY_PLANNER_TASKS_KEY, []));
-  }, []);
+  const fetchTasks = async () => {
+    if (!user) return;
+    setIsLoadingTasks(true);
+    try {
+      const { data, error } = await supabase
+        .from('day_planner_tasks')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('task_date', { ascending: true })
+        .order('start_time', { ascending: true });
+
+      if (error) throw error;
+      setTasks(data || []);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Fetching Tasks", description: (error as Error).message });
+    } finally {
+      setIsLoadingTasks(false);
+    }
+  };
 
   useEffect(() => {
-    saveToLocalStorage(DAY_PLANNER_TASKS_KEY, tasks);
-  }, [tasks]);
+    if (user && !authLoading) {
+      fetchTasks();
+    }
+  }, [user, authLoading]);
 
   const handleOpenDialog = (task?: Task) => {
     if (task) {
       setCurrentTask(task);
       setTaskTitle(task.title);
-      setTaskDate(parseISO(task.date));
-      setTaskTime(task.startTime);
-      setTaskDuration(task.duration);
+      // Ensure task.task_date is a valid date string before parsing
+      const parsedDate = task.task_date ? parseISO(task.task_date) : new Date();
+      setTaskDate(isValid(parsedDate) ? parsedDate : new Date());
+      setTaskTime(task.start_time);
+      setTaskDuration(task.duration || '1 hr');
     } else {
       setCurrentTask({});
       setTaskTitle('');
@@ -72,67 +96,122 @@ export default function DayPlannerPage() {
     setIsFormOpen(true);
   };
 
-  const handleSaveTask = () => {
+  const handleSaveTask = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      toast({ variant: "destructive", title: "Not Authenticated", description: "You must be logged in to save tasks." });
+      return;
+    }
     if (!taskTitle || !taskDate || !taskTime || !taskDuration) {
       toast({ variant: "destructive", title: "Missing Information", description: "Please fill in title, date, time, and duration." });
       return;
     }
+    setIsSubmitting(true);
 
-    const taskDataToSave: Omit<Task, 'id' | 'completed'> = {
+    const taskDataToSave = {
+      user_id: user.id,
       title: taskTitle,
-      date: taskDate.toISOString(),
-      startTime: taskTime,
+      task_date: format(startOfDay(taskDate), 'yyyy-MM-dd'), // Store date only
+      start_time: taskTime,
       duration: taskDuration,
+      completed: currentTask.id ? currentTask.completed : false, // Preserve completed status on edit
     };
 
-    if (currentTask.id) { // Editing existing task
-      setTasks(tasks.map(t => t.id === currentTask.id ? { ...t, ...taskDataToSave } : t));
-      toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
-      logActivity("Day Planner", `Task updated: "${taskTitle}"`);
-    } else { // Adding new task
-      const newTask: Task = {
-        id: crypto.randomUUID(),
-        ...taskDataToSave,
-        completed: false,
-      };
-      setTasks(prevTasks => [...prevTasks, newTask].sort((a,b) => {
-        const dateComparison = new Date(a.date).getTime() - new Date(b.date).getTime();
-        if (dateComparison !== 0) return dateComparison;
-        return a.startTime.localeCompare(b.startTime);
-      }));
-      toast({ title: "Task Added", description: `"${taskTitle}" has been scheduled.` });
-      logActivity("Day Planner", `Task added: "${taskTitle}"`);
-    }
-    setIsFormOpen(false);
-  };
-
-  const toggleTaskCompletion = (taskId: string) => {
-    setTasks(tasks.map(t => {
-      if (t.id === taskId) {
-        const updatedTask = { ...t, completed: !t.completed };
-        if (updatedTask.completed) {
-          logActivity("Day Planner", `Task completed: "${updatedTask.title}"`);
-        } else {
-          logActivity("Day Planner", `Task marked incomplete: "${updatedTask.title}"`);
-        }
-        return updatedTask;
+    try {
+      if (currentTask.id) { // Editing existing task
+        const { error } = await supabase
+          .from('day_planner_tasks')
+          .update({ ...taskDataToSave, updated_at: new Date().toISOString() })
+          .eq('id', currentTask.id)
+          .eq('user_id', user.id);
+        if (error) throw error;
+        toast({ title: "Task Updated", description: `"${taskTitle}" has been updated.` });
+      } else { // Adding new task
+        const { error } = await supabase
+          .from('day_planner_tasks')
+          .insert(taskDataToSave);
+        if (error) throw error;
+        toast({ title: "Task Added", description: `"${taskTitle}" has been scheduled.` });
       }
-      return t;
-    }));
+      fetchTasks(); // Refresh task list
+      setIsFormOpen(false);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Saving Task", description: (error as Error).message });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDeleteTask = (taskId: string) => {
+  const toggleTaskCompletion = async (taskId: string, currentStatus: boolean) => {
+    if (!user) return;
+    const optimisticTasks = tasks.map(t => t.id === taskId ? { ...t, completed: !currentStatus } : t);
+    setTasks(optimisticTasks); // Optimistic update
+
+    try {
+      const { error } = await supabase
+        .from('day_planner_tasks')
+        .update({ completed: !currentStatus, updated_at: new Date().toISOString() })
+        .eq('id', taskId)
+        .eq('user_id', user.id);
+      if (error) {
+        fetchTasks(); // Revert on error
+        throw error;
+      }
+      // No need to call fetchTasks() again if successful, optimistic update is fine
+      const task = tasks.find(t=>t.id === taskId);
+      if(task) toast({title: `Task ${!currentStatus ? 'Completed' : 'Marked Incomplete'}`, description: `"${task.title}"`});
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Updating Task", description: (error as Error).message });
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!user) return;
     const taskToDelete = tasks.find(t => t.id === taskId);
+    if (!taskToDelete) return;
+
+    // Optimistic delete
     setTasks(tasks.filter(t => t.id !== taskId));
-    if (taskToDelete) {
+
+    try {
+      const { error } = await supabase
+        .from('day_planner_tasks')
+        .delete()
+        .eq('id', taskId)
+        .eq('user_id', user.id);
+      if (error) {
+        fetchTasks(); // Revert on error
+        throw error;
+      }
       toast({ variant: "destructive", title: "Task Deleted", description: `"${taskToDelete.title}" removed.` });
-      logActivity("Day Planner", `Task deleted: "${taskToDelete.title}"`);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Deleting Task", description: (error as Error).message });
     }
   };
   
-  const todayISO = new Date().toISOString().split('T')[0];
-  const todayTasks = tasks.filter(task => task.date.startsWith(todayISO))
-                         .sort((a,b) => a.startTime.localeCompare(b.startTime));
+  const todayISO = format(new Date(), 'yyyy-MM-dd');
+  const todayTasks = tasks.filter(task => task.task_date === todayISO)
+                         .sort((a,b) => a.start_time.localeCompare(b.start_time));
+
+  if (authLoading || (isLoadingTasks && !tasks.length)) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <CalendarDays className="h-8 w-8 text-primary" />
+            <h1 className="text-3xl font-bold tracking-tight">Day Planner</h1>
+          </div>
+          <Button disabled><PlusCircle className="mr-2 h-4 w-4" /> Add Task</Button>
+        </div>
+        <Card className="shadow-lg">
+          <CardHeader><CardTitle>Loading Tasks...</CardTitle></CardHeader>
+          <CardContent className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -149,56 +228,61 @@ export default function DayPlannerPage() {
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-[425px]">
-            <DialogHeader>
-              <DialogTitle>{currentTask.id ? "Edit Task" : "Add New Task"}</DialogTitle>
-              <DialogDescription>
-                {currentTask.id ? "Modify the details of your task." : "Fill in the details for your new task."}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="task-title" className="text-right">Title</Label>
-                <Input id="task-title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} className="col-span-3" placeholder="e.g., Physics Homework" />
+            <form onSubmit={handleSaveTask}>
+              <DialogHeader>
+                <DialogTitle>{currentTask.id ? "Edit Task" : "Add New Task"}</DialogTitle>
+                <DialogDescription>
+                  {currentTask.id ? "Modify the details of your task." : "Fill in the details for your new task."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="task-title" className="text-right">Title</Label>
+                  <Input id="task-title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} className="col-span-3" placeholder="e.g., Physics Homework" />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="task-date" className="text-right">Date</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        id="task-date"
+                        variant={"outline"}
+                        className={cn(
+                          "col-span-3 justify-start text-left font-normal",
+                          !taskDate && "text-muted-foreground"
+                        )}
+                      >
+                        <CalendarIconLucide className="mr-2 h-4 w-4" />
+                        {taskDate ? format(taskDate, "PPP") : <span>Pick a date</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0">
+                      <Calendar
+                        mode="single"
+                        selected={taskDate}
+                        onSelect={setTaskDate}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="task-time" className="text-right">Time</Label>
+                  <Input id="task-time" type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} className="col-span-3" />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="task-duration" className="text-right">Duration</Label>
+                  <Input id="task-duration" value={taskDuration} onChange={(e) => setTaskDuration(e.target.value)} className="col-span-3" placeholder="e.g., 1 hr 30 mins" />
+                </div>
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="task-date" className="text-right">Date</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      id="task-date"
-                      variant={"outline"}
-                      className={cn(
-                        "col-span-3 justify-start text-left font-normal",
-                        !taskDate && "text-muted-foreground"
-                      )}
-                    >
-                      <CalendarIconLucide className="mr-2 h-4 w-4" />
-                      {taskDate ? format(taskDate, "PPP") : <span>Pick a date</span>}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar
-                      mode="single"
-                      selected={taskDate}
-                      onSelect={setTaskDate}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="task-time" className="text-right">Time</Label>
-                <Input id="task-time" type="time" value={taskTime} onChange={(e) => setTaskTime(e.target.value)} className="col-span-3" />
-              </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="task-duration" className="text-right">Duration</Label>
-                <Input id="task-duration" value={taskDuration} onChange={(e) => setTaskDuration(e.target.value)} className="col-span-3" placeholder="e.g., 1 hr 30 mins" />
-              </div>
-            </div>
-            <DialogFooter>
-              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
-              <Button type="submit" onClick={handleSaveTask}>Save Task</Button>
-            </DialogFooter>
+              <DialogFooter>
+                <DialogClose asChild><Button type="button" variant="outline" disabled={isSubmitting}>Cancel</Button></DialogClose>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save Task
+                </Button>
+              </DialogFooter>
+            </form>
           </DialogContent>
         </Dialog>
       </div>
@@ -208,18 +292,22 @@ export default function DayPlannerPage() {
           <CardDescription>Manage your daily tasks, mark them complete, and stay organized.</CardDescription>
         </CardHeader>
         <CardContent>
-          {todayTasks.length > 0 ? (
+          {isLoadingTasks && todayTasks.length === 0 ? (
+             <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+             </div>
+          ) : todayTasks.length > 0 ? (
             <ul className="space-y-3">
               {todayTasks.map(task => (
                 <li key={task.id} className="flex items-center justify-between p-3 border rounded-lg hover:shadow-sm transition-shadow bg-card/80">
                   <div className="flex items-center space-x-3">
-                    <Checkbox id={`task-${task.id}`} checked={task.completed} onCheckedChange={() => toggleTaskCompletion(task.id)} />
+                    <Checkbox id={`task-${task.id}`} checked={task.completed} onCheckedChange={() => toggleTaskCompletion(task.id, task.completed)} />
                     <div>
                       <Label htmlFor={`task-${task.id}`} className={`font-medium ${task.completed ? 'line-through text-muted-foreground' : ''}`}>
                         {task.title}
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        {task.startTime} ({task.duration})
+                        {task.start_time} ({task.duration})
                       </p>
                     </div>
                   </div>
@@ -244,22 +332,22 @@ export default function DayPlannerPage() {
           <CardDescription>View all tasks, not just for today.</CardDescription>
         </CardHeader>
         <CardContent>
-             {tasks.length > 0 ? (
+             {isLoadingTasks && tasks.length === 0 ? (
+                <div className="p-6 border rounded-lg min-h-[100px] bg-muted/30 flex items-center justify-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+             ) :tasks.length > 0 ? (
             <ul className="space-y-3">
-              {tasks.sort((a,b) => { // Sort all tasks by date then time
-                 const dateComparison = new Date(a.date).getTime() - new Date(b.date).getTime();
-                 if (dateComparison !== 0) return dateComparison;
-                 return a.startTime.localeCompare(b.startTime);
-                }).map(task => (
+              {tasks.map(task => ( // Already sorted by fetchTasks
                 <li key={task.id} className="flex items-center justify-between p-3 border rounded-lg hover:shadow-sm transition-shadow bg-card/80">
                   <div className="flex items-center space-x-3">
-                    <Checkbox id={`all-task-${task.id}`} checked={task.completed} onCheckedChange={() => toggleTaskCompletion(task.id)} />
+                    <Checkbox id={`all-task-${task.id}`} checked={task.completed} onCheckedChange={() => toggleTaskCompletion(task.id, task.completed)} />
                     <div>
                       <Label htmlFor={`all-task-${task.id}`} className={`font-medium ${task.completed ? 'line-through text-muted-foreground' : ''}`}>
                         {task.title}
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        {format(parseISO(task.date), "EEE, MMM d, yyyy")} at {task.startTime} ({task.duration})
+                        {format(parseISO(task.task_date), "EEE, MMM d, yyyy")} at {task.start_time} ({task.duration})
                       </p>
                     </div>
                   </div>

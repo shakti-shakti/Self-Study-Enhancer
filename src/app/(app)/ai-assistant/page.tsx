@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Send, Loader2, User, Bot } from "lucide-react";
 import { answerQuestion, type AnswerQuestionInput, type AnswerQuestionOutput } from '@/ai/flows/answer-questions';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"; // Removed AvatarImage as we use icons
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { logActivity } from '@/lib/activity-logger';
+import { useAuth } from '@/hooks/use-auth'; // Import useAuth
 
 interface Message {
   id: string;
@@ -19,6 +20,7 @@ interface Message {
 }
 
 export default function AiAssistantPage() {
+  const { user } = useAuth(); // Get user from context
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -47,7 +49,15 @@ export default function AiAssistantPage() {
     setIsLoading(true);
     setError(null);
 
-    logActivity("AI Query", `User asked: "${userMessageText.substring(0, 50)}${userMessageText.length > 50 ? '...' : ''}"`, { question: userMessageText });
+    if (user) { // Ensure user is available before logging
+      logActivity(
+        "AI Query", 
+        `User asked: "${userMessageText.substring(0, 50)}${userMessageText.length > 50 ? '...' : ''}"`, 
+        { question: userMessageText },
+        user.id // Pass user.id
+      );
+    }
+
 
     try {
       const input: AnswerQuestionInput = { question: userMessage.text };
@@ -71,7 +81,14 @@ export default function AiAssistantPage() {
         timestamp: new Date(),
       };
       setMessages(prevMessages => [...prevMessages, aiErrorMessage]);
-      logActivity("AI Error", `Error answering question: "${userMessageText.substring(0,50)}..."`, { error: errorMessageText });
+      if (user) { // Ensure user is available
+        logActivity(
+            "AI Error", 
+            `Error answering question: "${userMessageText.substring(0,50)}..."`, 
+            { error: errorMessageText },
+            user.id // Pass user.id
+        );
+      }
     } finally {
       setIsLoading(false);
     }
@@ -145,9 +162,9 @@ export default function AiAssistantPage() {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
-              disabled={isLoading}
+              disabled={isLoading || !user} // Disable if user not loaded
             />
-            <Button onClick={handleSendMessage} disabled={isLoading || !inputValue.trim()}>
+            <Button onClick={handleSendMessage} disabled={isLoading || !inputValue.trim() || !user}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               <span className="ml-2 sr-only sm:not-sr-only">Send</span>
             </Button>
@@ -157,3 +174,5 @@ export default function AiAssistantPage() {
     </div>
   );
 }
+
+    

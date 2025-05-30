@@ -1,13 +1,13 @@
+
 "use client";
 import { Label } from "@/components/ui/label";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
-import { History, ListFilter, Trash2, Search } from "lucide-react";
+import { History, ListFilter, Trash2, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getActivityLog, type ActivityLog, logActivity } from "@/lib/activity-logger"; 
+import { getActivityLog, type ActivityLog, deleteActivityLogEntry, clearUserActivityLog } from "@/lib/activity-logger"; 
 import { formatDistanceToNow } from 'date-fns';
-import { saveToLocalStorage } from "@/lib/local-storage";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,39 +20,70 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 
 export default function ActivityHistoryPage() {
+  const { user, isLoading: authLoading } = useAuth();
   const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const [isLoadingActivities, setIsLoadingActivities] = useState(true);
   const [filterTerm, setFilterTerm] = useState('');
   const { toast } = useToast();
 
+  const fetchActivities = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingActivities(true);
+    try {
+      const logs = await getActivityLog(user.id);
+      setActivities(logs);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Error Fetching History", description: (error as Error).message });
+    } finally {
+      setIsLoadingActivities(false);
+    }
+  }, [user, toast]);
+
   useEffect(() => {
-    setActivities(getActivityLog());
-  }, []);
+    if (user && !authLoading) {
+      fetchActivities();
+    }
+  }, [user, authLoading, fetchActivities]);
   
-  const handleClearAllHistory = () => {
-    saveToLocalStorage('neetPrepProActivityLog', []);
-    setActivities([]); 
-    logActivity("System", "Activity history completely cleared."); 
-    toast({ title: "History Cleared", description: "Your entire activity log has been cleared." });
+  const handleClearAllHistory = async () => {
+    if (!user) return;
+    const success = await clearUserActivityLog(user.id);
+    if (success) {
+      setActivities([]); 
+      toast({ title: "History Cleared", description: "Your entire activity log has been cleared." });
+      // Optionally log this specific clearing action if system logs are separate
+      // logActivity("System", "Activity history completely cleared by user.", undefined, user.id);
+    } else {
+      toast({ variant: "destructive", title: "Error", description: "Could not clear history." });
+    }
   };
 
-  const handleDeleteSpecificActivity = (activityId: string) => {
-    const updatedActivities = activities.filter(activity => activity.id !== activityId);
-    setActivities(updatedActivities);
-    saveToLocalStorage('neetPrepProActivityLog', updatedActivities);
+  const handleDeleteSpecificActivity = async (activityId: string) => {
+    if (!user || !activityId) return;
     const deletedActivity = activities.find(a => a.id === activityId);
-    toast({ title: "Activity Deleted", description: `Removed: "${deletedActivity?.description.substring(0,30)}..."` });
-    logActivity("System", `Specific activity deleted: ${deletedActivity?.type} - ${deletedActivity?.description.substring(0,30)}...`);
+    const success = await deleteActivityLogEntry(activityId, user.id);
+    
+    if (success) {
+      setActivities(prevActivities => prevActivities.filter(activity => activity.id !== activityId));
+      toast({ title: "Activity Deleted", description: `Removed: "${deletedActivity?.description.substring(0,30)}..."` });
+    } else {
+      toast({ variant: "destructive", title: "Error", description: "Could not delete activity." });
+    }
   };
 
   const filteredActivities = activities.filter(activity => {
     const searchTerm = filterTerm.toLowerCase();
     return activity.type.toLowerCase().includes(searchTerm) || 
            activity.description.toLowerCase().includes(searchTerm) ||
-           (activity.details && Object.values(activity.details).some(val => String(val).toLowerCase().includes(searchTerm)));
+           (activity.details && typeof activity.details === 'object' && Object.values(activity.details).some(val => String(val).toLowerCase().includes(searchTerm)));
   });
 
+  if (authLoading) {
+    return <div className="flex justify-center items-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -63,7 +94,7 @@ export default function ActivityHistoryPage() {
         </div>
         <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" disabled={activities.length === 0}>
+              <Button variant="destructive" disabled={activities.length === 0 || isLoadingActivities}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Clear All History
               </Button>
@@ -72,7 +103,7 @@ export default function ActivityHistoryPage() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This action will permanently delete ALL your activity history. This cannot be undone.
+                  This action will permanently delete ALL your activity history from the database. This cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -87,7 +118,7 @@ export default function ActivityHistoryPage() {
        <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Your Recent Interactions</CardTitle>
-          <CardDescription>Tracks completed tasks, solved tests, viewed content, and other app interactions.</CardDescription>
+          <CardDescription>Tracks completed tasks, solved tests, viewed content, and other app interactions stored in Supabase.</CardDescription>
            <div className="pt-4">
             <Label htmlFor="filter-activities" className="sr-only">Filter activities</Label>
             <div className="flex items-center space-x-2">
@@ -103,7 +134,11 @@ export default function ActivityHistoryPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {filteredActivities.length > 0 ? (
+          {isLoadingActivities ? (
+            <div className="p-6 border rounded-lg min-h-[200px] bg-muted/30 flex items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : filteredActivities.length > 0 ? (
             <ul className="space-y-4">
               {filteredActivities.map(activity => (
                 <li key={activity.id} className="p-4 border rounded-lg hover:bg-muted/50 transition-colors bg-card/80">
@@ -115,19 +150,21 @@ export default function ActivityHistoryPage() {
                         <p className="text-xs text-accent">Score: {activity.details.score}/{activity.details.total}</p>
                       )}
                       {activity.details && Object.entries(activity.details).map(([key, value]) => {
-                        if (key !== 'score' && key !== 'total' && typeof value !== 'object') { // Avoid rendering complex objects directly
+                        if (key !== 'score' && key !== 'total' && typeof value !== 'object') {
                            return <p key={key} className="text-xs text-muted-foreground/70">{key}: {String(value).substring(0,50)}{String(value).length > 50 ? '...' : ''}</p>
                         }
                         return null;
                       })}
                     </div>
                     <div className="flex flex-col items-end ml-2">
-                        <p className="text-xs text-muted-foreground whitespace-nowrap" title={new Date(activity.timestamp).toLocaleString()}>
-                            {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
+                        <p className="text-xs text-muted-foreground whitespace-nowrap" title={activity.timestamp ? new Date(activity.timestamp).toLocaleString() : 'N/A'}>
+                            {activity.timestamp ? formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true }) : 'Processing...'}
                         </p>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 mt-1 text-destructive hover:text-destructive" onClick={() => handleDeleteSpecificActivity(activity.id)} title="Delete this activity">
-                            <Trash2 className="h-3.5 w-3.5"/>
-                        </Button>
+                        {activity.id && (
+                            <Button variant="ghost" size="icon" className="h-7 w-7 mt-1 text-destructive hover:text-destructive" onClick={() => handleDeleteSpecificActivity(activity.id!)} title="Delete this activity">
+                                <Trash2 className="h-3.5 w-3.5"/>
+                            </Button>
+                        )}
                     </div>
                   </div>
                 </li>

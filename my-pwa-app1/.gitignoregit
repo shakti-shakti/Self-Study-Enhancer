@@ -1,0 +1,1 @@
+node_modules/ rm -r --cached node_modulesgit add .gitignoregit commit -m Removed node_modules and updated .gitignoregit push -u origin main
